@@ -68,7 +68,7 @@ step "fake RouterOS and PiKVM"
 kubectl create namespace nekromancer
 kubectl -n nekromancer create secret generic nekromancer-credentials \
   --from-literal=MIKROTIK_USERNAME=e2e --from-literal=MIKROTIK_PASSWORD=e2e
-kubectl -n nekromancer apply -f - <<'YAML'
+kubectl -n nekromancer apply -f - <<YAML
 apiVersion: v1
 kind: Pod
 metadata: {name: fake-routeros, labels: {app: fake-routeros}}
@@ -88,17 +88,19 @@ spec:
     - |
       import json
       from http.server import BaseHTTPRequestHandler, HTTPServer
-      led = {'power': True}
+      # Two ports, so a press on the wrong index shows up in the log.
+      ports = [{'name': 'other'}, {'name': '$ATX_HOST'}]
+      leds = [True, True]
       class H(BaseHTTPRequestHandler):
           def reply(self, body):
               self.send_response(200); self.end_headers(); self.wfile.write(body)
           def do_GET(self):
-              self.reply(json.dumps({'ok': True, 'result': {'enabled': True, 'leds': led}}).encode())
+              self.reply(json.dumps({'ok': True, 'result': {'model': {'ports': ports}, 'atx': {'leds': {'power': leds}}}}).encode())
           def do_POST(self):
               body = self.rfile.read(int(self.headers.get('Content-Length') or 0))
               print(self.path, body.decode(), flush=True)
-              if self.path == '/api/atx/power?action=off':
-                  led['power'] = False
+              if self.path == '/api/switch/atx/power?port=1&action=off':
+                  leds[1] = False
               self.reply(b'[]')
       HTTPServer(('', 8080), H).serve_forever()
 ---
@@ -167,8 +169,8 @@ sleep 25
 [ -z "$(annotation power-state)" ] || { echo "reaped a busy node"; exit 1; }
 echo "ok: busy node left alone"
 
-step "pikvm shutdown"
-wait_for "idle pikvm host pressed" 'kubectl -n nekromancer logs fake-routeros | grep -q "/api/atx/power?action=off"'
+step "pikvm shutdown, port named after the host"
+wait_for "idle pikvm host pressed" 'kubectl -n nekromancer logs fake-routeros | grep -q "/api/switch/atx/power?port=1&action=off"'
 wait_for "pikvm host's node deleted on LED off" '! kubectl get node "$ATX_HOST"'
 docker stop "$ATX_HOST" >/dev/null
 

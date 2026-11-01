@@ -57,8 +57,17 @@ type Host struct {
 	Address   string `json:"address"`
 	// PiKVMURL identifies the machine wired to that PiKVM's ATX header, or with PiKVMPort, the PiKVM it's behind.
 	PiKVMURL string `json:"pikvmURL"`
-	// PiKVMPort is the name of the host's Switch port on that PiKVM.
-	PiKVMPort string `json:"pikvmPort"`
+	// PiKVMPort is the name of the host's Switch port on that PiKVM, by default the host name.
+	// An explicit empty value selects the plain ATX API, for a PiKVM without a Switch.
+	PiKVMPort *string `json:"pikvmPort"`
+}
+
+// Port returns the Switch port name, empty for the plain ATX API.
+func (h Host) Port() string {
+	if h.PiKVMPort == nil {
+		return ""
+	}
+	return *h.PiKVMPort
 }
 
 // UsesPiKVM tells whether the host is wired to a PiKVM, whose power LED then proves its state.
@@ -97,6 +106,9 @@ func Parse(raw []byte) (*Config, error) {
 		if c.Hosts[i].Shutdown == "" {
 			c.Hosts[i].Shutdown = ShutdownOS
 		}
+		if c.Hosts[i].UsesPiKVM() && c.Hosts[i].PiKVMPort == nil {
+			c.Hosts[i].PiKVMPort = &c.Hosts[i].Name
+		}
 	}
 	if err := c.validate(); err != nil {
 		return nil, err
@@ -127,17 +139,17 @@ func (c *Config) validate() error {
 		// The plain ATX API has no target host: sharing a URL would press the wrong machine's button.
 		key := strings.ToLower(strings.TrimRight(h.PiKVMURL, "/"))
 		for port, other := range pikvms[key] {
-			if port == "" || h.PiKVMPort == "" {
+			if port == "" || h.Port() == "" {
 				return fmt.Errorf("hosts %q and %q have the same pikvmURL, so both need a pikvmPort", other, h.Name)
 			}
-			if port == h.PiKVMPort {
+			if port == h.Port() {
 				return fmt.Errorf("hosts %q and %q have the same pikvmPort %q", other, h.Name, port)
 			}
 		}
 		if pikvms[key] == nil {
 			pikvms[key] = map[string]string{}
 		}
-		pikvms[key][h.PiKVMPort] = h.Name
+		pikvms[key][h.Port()] = h.Name
 	}
 	return nil
 }
@@ -167,7 +179,7 @@ func (c *Config) validateProvider(h Host) error {
 		}
 		return nil
 	}
-	if h.PiKVMPort != "" {
+	if h.PiKVMPort != nil {
 		return errors.New("pikvmPort needs a pikvm wake or shutdown")
 	}
 	// Without a PiKVM, ICMP is the only way to confirm the host is down.

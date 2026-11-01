@@ -70,7 +70,7 @@ func Build(c *config.Config, creds Credentials) (map[string]Provider, error) {
 		kvm := &PiKVM{
 			HTTP: pikvmHTTP, URL: h.PiKVMURL,
 			Username: creds.PiKVMUsername, Password: creds.PiKVMPassword,
-			Port: h.PiKVMPort,
+			Port: h.Port(),
 		}
 		if h.UsesPiKVM() {
 			host.Prober = kvm

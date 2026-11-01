@@ -364,8 +364,8 @@ const bridgeState = `{"ok":true,"result":{"model":{"ports":[
 func TestBridgeTargetsPortByName(t *testing.T) {
 	url, presses := bridge(t, bridgeState)
 	got, err := Build(&config.Config{Hosts: []config.Host{
-		{Name: "a", Wake: config.WakePiKVM, Shutdown: config.ShutdownPiKVM, PiKVMURL: url, PiKVMPort: "mini1"},
-		{Name: "b", Wake: config.WakePiKVM, Shutdown: config.ShutdownPiKVM, PiKVMURL: url, PiKVMPort: "mini2"},
+		{Name: "a", Wake: config.WakePiKVM, Shutdown: config.ShutdownPiKVM, PiKVMURL: url, PiKVMPort: new("mini1")},
+		{Name: "b", Wake: config.WakePiKVM, Shutdown: config.ShutdownPiKVM, PiKVMURL: url, PiKVMPort: new("mini2")},
 	}}, Credentials{})
 	if err != nil {
 		t.Fatal(err)
@@ -402,7 +402,7 @@ func TestBridgeUnresolvedPortIsAnError(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			url, presses := bridge(t, tc.state)
 			got, err := Build(&config.Config{Hosts: []config.Host{
-				{Name: "a", Wake: config.WakePiKVM, Shutdown: config.ShutdownPiKVM, PiKVMURL: url, PiKVMPort: tc.port},
+				{Name: "a", Wake: config.WakePiKVM, Shutdown: config.ShutdownPiKVM, PiKVMURL: url, PiKVMPort: new(tc.port)},
 			}}, Credentials{})
 			if err != nil {
 				t.Fatal(err)
@@ -421,5 +421,43 @@ func TestBridgeUnresolvedPortIsAnError(t *testing.T) {
 				t.Fatalf("pressed: %v", *presses)
 			}
 		})
+	}
+}
+
+// An inventory host without pikvmPort uses the Switch port named after it.
+func TestBridgeDefaultsToPortNamedAfterHost(t *testing.T) {
+	url, presses := bridge(t, bridgeState)
+	c, err := config.Parse([]byte("hosts:\n- {name: mini2, wake: pikvm, shutdown: pikvm, pikvmURL: '" + url + "'}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Build(c, Credentials{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := got["mini2"].PowerOff(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(*presses) != 1 || (*presses)[0] != "2:off" {
+		t.Fatalf("presses = %v", *presses)
+	}
+}
+
+// pikvmPort: "" keeps the plain ATX API for a PiKVM without a Switch.
+func TestEmptyPortUsesPlainATX(t *testing.T) {
+	url, actions := recorder(t, ledOn)
+	c, err := config.Parse([]byte("hosts:\n- {name: a, wake: pikvm, shutdown: pikvm, pikvmURL: '" + url + "', pikvmPort: ''}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Build(c, Credentials{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := got["a"].PowerOff(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(*actions) != 1 || (*actions)[0] != "off" {
+		t.Fatalf("actions = %v", *actions)
 	}
 }

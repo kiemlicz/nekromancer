@@ -97,10 +97,12 @@ func TestParseRejects(t *testing.T) {
 		"no mikrotik url":               {"hosts:\n- {name: a, wake: mikrotik, mac: 'AA:BB:CC:DD:EE:01', interface: b, address: 10.0.0.1}\n", "mikrotik.url"},
 		"no pikvm url":                  {"hosts:\n- {name: a, wake: pikvm}\n", "pikvmURL"},
 		"pikvm shutdown without url":    {mikrotikHostWith(", shutdown: pikvm"), "pikvmURL"},
-		"shared pikvm":                  {"hosts:\n- {name: a, wake: pikvm, pikvmURL: 'https://p/'}\n- {name: b, wake: pikvm, pikvmURL: 'https://P'}\n", "same pikvmURL"},
-		"shared pikvm, one port":        {"hosts:\n- {name: a, wake: pikvm, pikvmURL: 'https://p', pikvmPort: a}\n- {name: b, wake: pikvm, pikvmURL: 'https://p'}\n", "same pikvmURL"},
-		"shared pikvm, one port first":  {"hosts:\n- {name: a, wake: pikvm, pikvmURL: 'https://p'}\n- {name: b, wake: pikvm, pikvmURL: 'https://p', pikvmPort: b}\n", "same pikvmURL"},
+		"shared pikvm":                  {"hosts:\n- {name: a, wake: pikvm, pikvmURL: 'https://p/', pikvmPort: ''}\n- {name: b, wake: pikvm, pikvmURL: 'https://P', pikvmPort: ''}\n", "same pikvmURL"},
+		"shared pikvm, one port":        {"hosts:\n- {name: a, wake: pikvm, pikvmURL: 'https://p'}\n- {name: b, wake: pikvm, pikvmURL: 'https://p', pikvmPort: ''}\n", "same pikvmURL"},
+		"shared pikvm, one port first":  {"hosts:\n- {name: a, wake: pikvm, pikvmURL: 'https://p', pikvmPort: ''}\n- {name: b, wake: pikvm, pikvmURL: 'https://p'}\n", "same pikvmURL"},
 		"shared pikvm port":             {"hosts:\n- {name: a, wake: pikvm, pikvmURL: 'https://p', pikvmPort: x}\n- {name: b, wake: pikvm, pikvmURL: 'https://P/', pikvmPort: x}\n", "same pikvmPort"},
+		"default port collides":         {"hosts:\n- {name: a, wake: pikvm, pikvmURL: 'https://p', pikvmPort: b}\n- {name: b, wake: pikvm, pikvmURL: 'https://p'}\n", "same pikvmPort"},
+		"empty port without pikvm":      {mikrotikHostWith(", pikvmPort: ''"), "pikvmPort"},
 		"port without pikvm":            {mikrotikHostWith(", pikvmPort: x"), "pikvmPort"},
 		"os shutdown without any probe": {"mikrotik: {url: https://r}\nhosts:\n- {name: a, wake: mikrotik, mac: 'AA:BB:CC:DD:EE:01', interface: b}\n", "address"},
 		"negative timeout":              {"defaultIdleTimeout: -1m\n" + mikrotikHostWith(""), "defaultIdleTimeout"},
@@ -122,5 +124,25 @@ func TestHostsShareAPiKVMThroughPorts(t *testing.T) {
 	}
 	if _, err := Load(path); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPiKVMPortDefaultsToHostName(t *testing.T) {
+	c, err := Parse([]byte(`hosts:
+- {name: default, wake: pikvm, pikvmURL: 'https://p'}
+- {name: shutdown-only, wake: mikrotik, shutdown: pikvm, mac: 'AA:BB:CC:DD:EE:01', interface: b, pikvmURL: 'https://p'}
+- {name: named, wake: pikvm, pikvmURL: 'https://p', pikvmPort: other}
+- {name: plain, wake: pikvm, pikvmURL: 'https://q', pikvmPort: ''}
+- {name: wol, wake: mikrotik, mac: 'AA:BB:CC:DD:EE:02', interface: b, address: 10.0.0.1}
+mikrotik: {url: 'https://m'}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"default": "default", "shutdown-only": "shutdown-only", "named": "other", "plain": "", "wol": ""}
+	for _, h := range c.Hosts {
+		if h.Port() != want[h.Name] {
+			t.Errorf("%s: port = %q, want %q", h.Name, h.Port(), want[h.Name])
+		}
 	}
 }

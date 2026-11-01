@@ -67,7 +67,8 @@ config:
     labels: {workload: nas}
     wake: pikvm
     shutdown: pikvm             # default is os
-    pikvmURL: https://pikvm-mini2.lan
+    pikvmURL: https://pikvm.lan
+    # pikvmPort: mini2          # PiKVM Switch port, default is the host name. "" for a PiKVM without a Switch
 ```
 
 ```bash
@@ -93,12 +94,12 @@ Each host picks how it wakes and how it shuts down separately.
 | `wake` | Call |
 |---|---|
 | `mikrotik` | `POST /rest/tool/wol` |
-| `pikvm` | `POST /api/atx/power?action=on`, skipped if the power LED is already on |
+| `pikvm` | `POST /api/switch/atx/power?port=<index>&action=on`, skipped if the power LED is already on |
 
 | `shutdown` | How |
 |---|---|
 | `os` (default) | The node-agent calls logind `PowerOff` over the host's system bus, a graceful OS shutdown like `shutdown -h now`. Needs systemd |
-| `pikvm` | ATX soft press, `POST /api/atx/power?action=off`, skipped if the power LED is already off |
+| `pikvm` | ATX soft press, `POST /api/switch/atx/power?port=<index>&action=off`, skipped if the power LED is already off |
 
 A host using PiKVM for either is verified offline by its power LED. Any other host needs `address`, and is verified with 3 pings, 1s timeout each.
 
@@ -109,8 +110,8 @@ A PiKVM reports nothing about the machine wired to it, so the pointer is yours t
 
 | Setup | Inventory | Calls |
 |---|---|---|
-| One machine per PiKVM | `pikvmURL` | `/api/atx`, `/api/atx/power` |
-| Several machines behind one PiKVM, using PiKVM Switch ports | `pikvmURL` and `pikvmPort` | `/api/switch`, `/api/switch/atx/power?port=<index>` |
+| PiKVM Switch, one or several machines | `pikvmURL`, plus `pikvmPort` if the port name differs from the host name | `/api/switch`, `/api/switch/atx/power?port=<index>` |
+| One machine per PiKVM, no Switch | `pikvmURL` and `pikvmPort: ""` | `/api/atx`, `/api/atx/power` |
 
 ### Setting up PiKVM Switch ports
 
@@ -123,7 +124,7 @@ curl -sk -H 'X-KVMD-User: admin' -H 'X-KVMD-Passwd: <password>' https://pikvm.la
 `result.model.ports` holds one entry per port, and `result.atx.leds.power` the power LEDs in the same order.
 Ports with a machine attached normally show `true` in `result.video.links` and `result.usb.links`.
 
-Name each port in the PiKVM's port settings, or through the API. Using the Node name keeps both sides readable.
+Name each port in the PiKVM's port settings, or through the API. `pikvmPort` defaults to the host name, so using the Node name needs no extra config.
 The API's `port` is the zero-based index, so the port with `id` 1 is `port=0`:
 
 ```bash
@@ -137,13 +138,13 @@ Then point each host at its port, with `pikvm.insecureSkipVerify: true` if the P
 
 ```yaml
 hosts:
-- {name: mini1, wake: pikvm, shutdown: pikvm, pikvmURL: https://pikvm.lan, pikvmPort: mini1}
-- {name: mini2, wake: pikvm, pikvmURL: https://pikvm.lan, pikvmPort: mini2}
+- {name: mini1, wake: pikvm, shutdown: pikvm, pikvmURL: https://pikvm.lan}             # port named mini1
+- {name: mini2, wake: pikvm, pikvmURL: https://pikvm.lan, pikvmPort: rack-2}            # port named rack-2
 ```
 
 The port is looked up by exact name on every call, so moving it to another number is harmless.
 If the name matches no port or several, nothing is pressed and the host doesn't count as offline.
-Hosts sharing a `pikvmURL` must all set different `pikvmPort` values, or config validation fails.
+Hosts sharing a `pikvmURL` must all resolve to different ports, or config validation fails.
 
 ### Check the wiring before relying on it
 
