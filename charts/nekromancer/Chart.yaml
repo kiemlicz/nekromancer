@@ -1,0 +1,6 @@
+apiVersion: v2
+name: nekromancer
+description: Powers bare-metal Kubernetes nodes off when idle and back on for pending pods
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

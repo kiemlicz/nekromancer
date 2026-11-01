@@ -1,0 +1,26 @@
+image:
+  repository: nekromancer
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Name of an existing Secret with MIKROTIK_USERNAME, MIKROTIK_PASSWORD,
+# PIKVM_USERNAME and PIKVM_PASSWORD. Credentials never go in values.
+credentialsSecret: nekromancer-credentials
+
+# Set false when every host uses PiKVM, which shuts down over ATX.
+agent:
+  enabled: true
+  systemBusSocket: /run/dbus/system_bus_socket
+
+# Inventory, see README. Host names must equal Node names.
+config:
+  defaultIdleTimeout: 10m
+  notReadyGrace: 1m
+  wakeCooldown: 5m
+  powerOffRetry: 2m
+  mikrotik:
+    url: ""
+    insecureSkipVerify: false
+  pikvm:
+    insecureSkipVerify: false
+  hosts: []

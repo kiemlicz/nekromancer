@@ -1,0 +1,54 @@
+{{- if .Values.agent.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-agent
+  labels: {{- include "nekromancer.labels" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Release.Name }}-agent
+  labels: {{- include "nekromancer.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "nekromancer.labels" . | nindent 6 }}
+      app.kubernetes.io/component: agent
+  template:
+    metadata:
+      labels:
+        {{- include "nekromancer.labels" . | nindent 8 }}
+        app.kubernetes.io/component: agent
+    spec:
+      serviceAccountName: {{ .Release.Name }}-agent
+      nodeSelector:
+        nekromancer.kiemlicz.github.io/managed: "true"
+      tolerations:
+      - operator: Exists
+      containers:
+      - name: agent
+        image: {{ include "nekromancer.image" . }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ["/node-agent"]
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        # logind authorises PowerOff for uid 0, no capabilities are needed.
+        securityContext:
+          runAsUser: 0
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: system-bus
+          mountPath: /run/dbus/system_bus_socket
+      volumes:
+      - name: system-bus
+        hostPath:
+          path: {{ .Values.agent.systemBusSocket }}
+          type: Socket
+{{- end }}
