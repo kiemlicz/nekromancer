@@ -13,8 +13,8 @@ flowchart LR
     end
     API[("Kubernetes API")]
     subgraph host["Managed host"]
-        AG["node-agent DaemonSet"]
-        LD["logind"]
+        AG["node-agent DaemonSet, shutdown: os hosts only"]
+        OS["Host OS"]
         KL["kubelet"]
     end
     MT["MikroTik router"]
@@ -24,13 +24,13 @@ flowchart LR
     WR <-->|"watch pending pods, read nodes"| API
     AG <-->|"watch own Node"| API
     KL <-->|"register Node, run pods"| API
-    AG -->|"PowerOff over D-Bus"| LD
+    AG -->|"shutdown -h now, through nsenter"| OS
     WR -->|"WoL request"| MT
     MT -.->|"magic packet"| host
     WR -->|"ATX power on"| PK
-    NR -->|"ATX soft press, read power LED"| PK
+    NR -->|"ATX soft press on shutdown: pikvm, read power LED"| PK
     PK -.->|"ATX header"| host
-    NR -.->|"ICMP probe, mikrotik hosts"| host
+    NR -.->|"ICMP probe, hosts without a PiKVM"| host
 ```
 
 ## Node state
@@ -95,6 +95,7 @@ sequenceDiagram
 
 Manual shutdown enters here directly through `kubectl annotate`, and idle shutdown enters here through the patch above.
 The Node is kept until the host is confirmed down.
+Each host uses exactly one shutdown method, picked in the inventory.
 
 ```mermaid
 sequenceDiagram
@@ -116,11 +117,13 @@ sequenceDiagram
     end
 
     NR->>API: patch shutdown-requested=now
-    API-->>AG: own Node updated
 
-    alt provider is mikrotik
-        Note over NR: PowerOff is a no-op, the agent acts on the annotation
-    else provider is pikvm
+    alt shutdown is os
+        API-->>AG: own Node updated
+        AG->>AG: check managed, not control plane, power-state=off
+        AG->>Host: shutdown -h now, through nsenter
+    else shutdown is pikvm
+        Note over AG: not scheduled on this host
         NR->>PK: GET /api/atx
         PK-->>NR: power LED state
         opt LED is on
@@ -128,20 +131,17 @@ sequenceDiagram
             PK->>Host: ATX soft press
         end
     end
-
-    AG->>AG: check managed, not control plane, power-state=off
-    AG->>Host: logind PowerOff over D-Bus
     Host->>Host: graceful shutdown
 
     loop every 5s until confirmed offline
-        alt provider is mikrotik
-            NR->>Host: up to 3 ICMP echoes
-        else provider is pikvm
+        alt host uses a PiKVM
             NR->>PK: read power LED
+        else no PiKVM
+            NR->>Host: up to 3 ICMP echoes
         end
         opt online for longer than powerOffRetry
             NR->>API: rewrite shutdown-requested, warning event
-            Note over NR,AG: new timestamp retriggers the agent
+            Note over NR,PK: the agent sees a new timestamp, or the PiKVM gets another press
         end
     end
 

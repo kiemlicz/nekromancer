@@ -8,13 +8,12 @@ import (
 	"strings"
 )
 
-// Mikrotik wakes hosts through a RouterOS WoL call and confirms them down with a Prober.
+// Mikrotik wakes hosts through a RouterOS WoL call.
 type Mikrotik struct {
 	HTTP               *http.Client
 	URL                string
 	Username, Password string
 	MAC, Interface     string
-	Prober             Prober
 }
 
 func (m *Mikrotik) PowerOn(ctx context.Context) error {
@@ -31,9 +30,3 @@ func (m *Mikrotik) PowerOn(ctx context.Context) error {
 	_, err = do(m.HTTP, req)
 	return err
 }
-
-// PowerOff is a no-op: WoL cannot shut down, the node-agent acts on the
-// shutdown-requested annotation instead.
-func (m *Mikrotik) PowerOff(context.Context) error { return nil }
-
-func (m *Mikrotik) Offline(ctx context.Context) (bool, error) { return m.Prober.Offline(ctx) }

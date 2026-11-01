@@ -5,6 +5,8 @@ set -euo pipefail
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 fail() { echo "FAIL: $*"; exit 1; }
+chart_sum() { find charts -type f -exec sha256sum {} + | sort; }
+BEFORE=$(chart_sum)
 
 # args: ref_type ref_name sha owner want_version want_app want_image
 check() {
@@ -26,5 +28,5 @@ check tag v1.2.3 abcdef1234567890 KieMlicz 1.2.3 1.2.3 ghcr.io/kiemlicz/nekroman
 if hack/package-chart.sh tag 1.2.3 abcdef1234567890 kiemlicz "$OUT/bad" >/dev/null 2>&1; then
   fail "tag without v prefix accepted"
 fi
-[ -z "$(git status --porcelain charts)" ] || git diff --quiet charts || fail "repo chart modified"
+[ "$(chart_sum)" = "$BEFORE" ] || fail "repo chart modified"
 echo PASS

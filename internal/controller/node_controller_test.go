@@ -218,6 +218,17 @@ func TestRetriesPowerOffAfterWindow(t *testing.T) {
 	}
 }
 
+// The inventory entry is found by Node name, nothing else identifies the host.
+func TestPowersOffOnlyTheProviderNamedAfterTheNode(t *testing.T) {
+	e := newEnv(t, managedNode("mini1", off()))
+	other := &fakeProvider{}
+	e.rec.Providers["mini2"] = other
+	e.reconcile()
+	if e.provider.powerOffs != 1 || other.powerOffs != 0 {
+		t.Fatalf("mini1 = %d, mini2 = %d", e.provider.powerOffs, other.powerOffs)
+	}
+}
+
 // --- use case 3: physical power button
 
 func TestNotReadyWithinGraceWaits(t *testing.T) {

@@ -11,13 +11,6 @@ import (
 	"gitlab.l3a.dev/infra/nekromancer/internal/config"
 )
 
-type stubProber struct {
-	offline bool
-	err     error
-}
-
-func (s stubProber) Offline(context.Context) (bool, error) { return s.offline, s.err }
-
 func TestMikrotikPowerOnSendsWoL(t *testing.T) {
 	var gotPath, gotUser, gotPass string
 	var body map[string]string
@@ -50,14 +43,6 @@ func TestMikrotikPowerOnSurfacesAPIError(t *testing.T) {
 	m := &Mikrotik{HTTP: srv.Client(), URL: srv.URL}
 	if err := m.PowerOn(context.Background()); err == nil {
 		t.Fatal("want error")
-	}
-}
-
-func TestMikrotikOfflineDelegatesToProber(t *testing.T) {
-	m := &Mikrotik{Prober: stubProber{offline: true}}
-	off, err := m.Offline(context.Background())
-	if err != nil || !off {
-		t.Fatalf("off=%v err=%v", off, err)
 	}
 }
 
@@ -189,22 +174,106 @@ func TestICMPOfflineForSilentAddress(t *testing.T) {
 	}
 }
 
-func TestBuildCreatesProviderPerHost(t *testing.T) {
-	c := &config.Config{
-		Mikrotik: config.Mikrotik{URL: "https://r"},
-		Hosts: []config.Host{
-			{Name: "a", Provider: config.ProviderMikrotik, Address: "10.0.0.1"},
-			{Name: "b", Provider: config.ProviderPiKVM, PiKVMURL: "https://p"},
-		},
-	}
-	got, err := Build(c, Credentials{})
+// recorder fakes one PiKVM and counts the presses it receives.
+func recorder(t *testing.T) (string, *[]string) {
+	t.Helper()
+	var actions []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/atx":
+			_, _ = w.Write([]byte(ledOn))
+		case "POST /api/atx/power":
+			actions = append(actions, r.URL.Query().Get("action"))
+			_, _ = w.Write([]byte(`{"ok":true,"result":{}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, &actions
+}
+
+// A press on the wrong PiKVM would power off the wrong machine.
+func TestBuildPressesOnlyThatHostsPiKVM(t *testing.T) {
+	urlA, a := recorder(t)
+	urlB, b := recorder(t)
+	got, err := Build(&config.Config{Hosts: []config.Host{
+		{Name: "a", Wake: config.WakePiKVM, Shutdown: config.ShutdownPiKVM, PiKVMURL: urlA},
+		{Name: "b", Wake: config.WakePiKVM, Shutdown: config.ShutdownPiKVM, PiKVMURL: urlB},
+	}}, Credentials{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := got["a"].(*Mikrotik); !ok {
-		t.Errorf("a = %T", got["a"])
+	if err := got["b"].PowerOff(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := got["b"].(*PiKVM); !ok {
-		t.Errorf("b = %T", got["b"])
+	if len(*a) != 0 || len(*b) != 1 || (*b)[0] != "off" {
+		t.Fatalf("a = %v, b = %v", *a, *b)
 	}
 }
+
+// The node-agent runs the command on these hosts. A press as well would race it.
+func TestBuildOSShutdownNeverPresses(t *testing.T) {
+	url, actions := recorder(t)
+	got, err := Build(&config.Config{Hosts: []config.Host{
+		{Name: "a", Wake: config.WakePiKVM, Shutdown: config.ShutdownOS, PiKVMURL: url},
+	}}, Credentials{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := got["a"].PowerOff(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(*actions) != 0 {
+		t.Fatalf("actions = %v", *actions)
+	}
+	if err := got["a"].PowerOn(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(*actions) != 1 || (*actions)[0] != "on" {
+		t.Fatalf("actions = %v", *actions)
+	}
+}
+
+func TestBuildWakesOverMikrotikAndShutsDownOverPiKVM(t *testing.T) {
+	url, actions := recorder(t)
+	wol := 0
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		wol++
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer router.Close()
+	got, err := Build(&config.Config{
+		Mikrotik: config.Mikrotik{URL: router.URL},
+		Hosts:    []config.Host{{Name: "a", Wake: config.WakeMikrotik, Shutdown: config.ShutdownPiKVM, PiKVMURL: url}},
+	}, Credentials{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := got["a"].PowerOn(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := got["a"].PowerOff(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if wol != 1 || len(*actions) != 1 || (*actions)[0] != "off" {
+		t.Fatalf("wol = %d, actions = %v", wol, *actions)
+	}
+}
+
+func TestBuildProbesLEDOnlyWhenWiredToPiKVM(t *testing.T) {
+	url, _ := recorder(t)
+	got, err := Build(&config.Config{Hosts: []config.Host{
+		{Name: "atx", Wake: config.WakePiKVM, Shutdown: config.ShutdownOS, PiKVMURL: url},
+		{Name: "wol", Wake: config.WakeMikrotik, Shutdown: config.ShutdownOS, Address: "127.0.0.1"},
+	}}, Credentials{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := got["atx"].(*Host); !isPiKVM(h.Prober) {
+		t.Errorf("atx prober = %T", h.Prober)
+	}
+	if h := got["wol"].(*Host); isPiKVM(h.Prober) {
+		t.Errorf("wol prober = %T", h.Prober)
+	}
+}
+
+func isPiKVM(p Prober) bool { _, ok := p.(*PiKVM); return ok }

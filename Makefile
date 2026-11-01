@@ -9,6 +9,7 @@ build:
 test:
 	KUBEBUILDER_ASSETS="$$($(ENVTEST) use $(ENVTEST_K8S) -p path)" go test ./...
 	hack/package-chart_test.sh
+	hack/chart_test.sh
 
 lint:
 	go vet ./...

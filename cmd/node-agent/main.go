@@ -25,7 +25,6 @@ func main() {
 }
 
 func run() error {
-	busAddress := flag.String("bus-address", "unix:path=/run/dbus/system_bus_socket", "D-Bus address of the host system bus")
 	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -44,7 +43,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	r := &agent.Reconciler{Client: mgr.GetClient(), PowerOff: agent.Logind{Address: *busAddress}.PowerOff}
+	r := &agent.Reconciler{Client: mgr.GetClient(), PowerOff: agent.HostShutdown.PowerOff}
 	if err := r.SetupWithManager(mgr); err != nil {
 		return err
 	}

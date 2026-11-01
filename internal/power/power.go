@@ -17,16 +17,36 @@ import (
 
 // Provider controls one host.
 type Provider interface {
+	Waker
+	Shutdowner
+	Prober
+}
+
+type Waker interface {
 	PowerOn(ctx context.Context) error
+}
+
+type Shutdowner interface {
 	PowerOff(ctx context.Context) error
+}
+
+type Prober interface {
 	// Offline must only return true when the host is confirmed down: a false
 	// positive deletes the Node of a running machine. Uncertainty is an error.
 	Offline(ctx context.Context) (bool, error)
 }
 
-type Prober interface {
-	Offline(ctx context.Context) (bool, error)
+// Host combines the methods chosen for one inventory entry.
+type Host struct {
+	Waker
+	Shutdowner
+	Prober
 }
+
+// OS leaves the shutdown to the node-agent, which acts on the shutdown-requested annotation.
+type OS struct{}
+
+func (OS) PowerOff(context.Context) error { return nil }
 
 // Credentials are supplied from a Secret, never from the inventory.
 type Credentials struct {
@@ -46,22 +66,30 @@ func Build(c *config.Config, creds Credentials) (map[string]Provider, error) {
 	}
 	out := make(map[string]Provider, len(c.Hosts))
 	for _, h := range c.Hosts {
-		switch h.Provider {
-		case config.ProviderMikrotik:
-			out[h.Name] = &Mikrotik{
+		host := &Host{Shutdowner: OS{}, Prober: &ICMP{Address: h.Address}}
+		kvm := &PiKVM{
+			HTTP: pikvmHTTP, URL: h.PiKVMURL,
+			Username: creds.PiKVMUsername, Password: creds.PiKVMPassword,
+		}
+		if h.UsesPiKVM() {
+			host.Prober = kvm
+		}
+		if h.Shutdown == config.ShutdownPiKVM {
+			host.Shutdowner = kvm
+		}
+		switch h.Wake {
+		case config.WakeMikrotik:
+			host.Waker = &Mikrotik{
 				HTTP: mikrotikHTTP, URL: c.Mikrotik.URL,
 				Username: creds.MikrotikUsername, Password: creds.MikrotikPassword,
 				MAC: h.MAC, Interface: h.Interface,
-				Prober: &ICMP{Address: h.Address},
 			}
-		case config.ProviderPiKVM:
-			out[h.Name] = &PiKVM{
-				HTTP: pikvmHTTP, URL: h.PiKVMURL,
-				Username: creds.PiKVMUsername, Password: creds.PiKVMPassword,
-			}
+		case config.WakePiKVM:
+			host.Waker = kvm
 		default:
-			return nil, fmt.Errorf("host %q: unknown provider %q", h.Name, h.Provider)
+			return nil, fmt.Errorf("host %q: unknown wake provider %q", h.Name, h.Wake)
 		}
+		out[h.Name] = host
 	}
 	return out, nil
 }

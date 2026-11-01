@@ -73,7 +73,7 @@ func TestSameRequestActsOnce(t *testing.T) {
 
 func TestFailureIsRetried(t *testing.T) {
 	calls := 0
-	r, err := run(t, node(managed, requested), func(context.Context) error { calls++; return errors.New("logind down") })
+	r, err := run(t, node(managed, requested), func(context.Context) error { calls++; return errors.New("shutdown failed") })
 	if err == nil {
 		t.Fatal("want error")
 	}

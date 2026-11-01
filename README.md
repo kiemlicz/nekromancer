@@ -37,6 +37,8 @@ Labels must be set through kubelet flags, because the Node object is deleted on 
 - Power off waits for the drain.
   PodDisruptionBudgets are honoured, so a blocked eviction retries indefinitely rather than forcing anything.
 - The chart keeps the controller off managed nodes, so it can't power off its own host.
+- The node-agent is privileged and shares the host's PID namespace, because it has to run `shutdown` on the host.
+  The chart only schedules it on inventory hosts with `shutdown: os`, so PiKVM shutdown hosts never run it.
 
 ## Install
 
@@ -55,14 +57,15 @@ config:
   hosts:
   - name: mini1                 # must equal the Node name
     labels: {workload: plex}    # must mirror the kubelet --node-labels
-    provider: mikrotik
+    wake: mikrotik
     mac: "AA:BB:CC:DD:EE:01"
     interface: bridge
     address: 192.168.1.50       # IPv4, pinged to verify the host is down
   - name: mini2
     labels: {workload: nas}
-    provider: pikvm
-    pikvmURL: https://pikvm.lan
+    wake: pikvm
+    shutdown: pikvm             # default is os
+    pikvmURL: https://pikvm-mini2.lan
 ```
 
 ```bash
@@ -75,12 +78,28 @@ The RouterOS user needs the `rest-api` policy and rights to run `/tool/wol`.
 
 ### Providers
 
-| | Wake | Power off | Verify offline |
-|---|---|---|---|
-| `mikrotik` | `POST /rest/tool/wol` | node-agent, logind over the host system bus | ICMP, 3 pings with 1s timeout |
-| `pikvm` | `POST /api/atx/power?action=on` | ATX soft press, and the node-agent if deployed | ATX power LED |
+Each host picks how it wakes and how it shuts down separately.
 
-Set `agent.enabled: false` if every host uses PiKVM.
+| `wake` | Call |
+|---|---|
+| `mikrotik` | `POST /rest/tool/wol` |
+| `pikvm` | `POST /api/atx/power?action=on` |
+
+| `shutdown` | How |
+|---|---|
+| `os` (default) | The node-agent runs `shutdown -h now` on the host |
+| `pikvm` | ATX soft press, `POST /api/atx/power?action=off`, skipped if the power LED is already off |
+
+A host using PiKVM for either is verified offline by its power LED. Any other host needs `address`, and is verified with 3 pings, 1s timeout each.
+
+### How a node maps to its hardware
+
+The Node name is looked up in `hosts[].name` with an exact match, and that entry's own `pikvmURL`, MAC and address are used.
+The ATX API has no target host, so one URL means one machine, and two hosts sharing a `pikvmURL` fail config validation.
+
+Nothing checks that a PiKVM is really wired to the host named in its entry, so a swapped URL presses the other machine's button.
+Its LED then answers for the wrong machine too, which can delete the Node of a host that's still running.
+Check each mapping by hand when adding a host.
 
 ## Images and chart
 
@@ -117,6 +136,5 @@ make e2e    # real image and chart on a throwaway kind cluster, needs Docker
 ```
 
 `make e2e` uses its own kubeconfig and never touches your current context.
-`docker stop` stands in for a host powering off.
-kind nodes have no system bus, so the node-agent's real power off is only covered by `internal/agent/logind_test.go`,
-which runs against a private bus with a fake logind.
+kind nodes have no `shutdown` binary, so a stub records that the node-agent ran it inside the host's namespaces, and `docker stop` stands in for the power going off.
+A real `shutdown -h now`, a real PiKVM and a real RouterOS are not exercised.

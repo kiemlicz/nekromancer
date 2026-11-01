@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,8 +15,12 @@ import (
 )
 
 const (
-	ProviderMikrotik = "mikrotik"
-	ProviderPiKVM    = "pikvm"
+	WakeMikrotik = "mikrotik"
+	WakePiKVM    = "pikvm"
+
+	// ShutdownOS has the node-agent run the shutdown command on the host.
+	ShutdownOS    = "os"
+	ShutdownPiKVM = "pikvm"
 )
 
 type Config struct {
@@ -45,13 +50,19 @@ type Mikrotik struct {
 type Host struct {
 	Name string `json:"name"`
 	// Labels must mirror the kubelet --node-labels, pending pods are matched against them.
-	Labels    map[string]string `json:"labels"`
-	Provider  string            `json:"provider"`
-	MAC       string            `json:"mac"`
-	Interface string            `json:"interface"`
-	Address   string            `json:"address"`
-	PiKVMURL  string            `json:"pikvmURL"`
+	Labels map[string]string `json:"labels"`
+	Wake   string            `json:"wake"`
+	// Shutdown defaults to ShutdownOS.
+	Shutdown  string `json:"shutdown"`
+	MAC       string `json:"mac"`
+	Interface string `json:"interface"`
+	Address   string `json:"address"`
+	// PiKVMURL identifies the one machine wired to that PiKVM's ATX header.
+	PiKVMURL string `json:"pikvmURL"`
 }
+
+// UsesPiKVM tells whether the host is wired to a PiKVM, whose power LED then proves its state.
+func (h Host) UsesPiKVM() bool { return h.Wake == WakePiKVM || h.Shutdown == ShutdownPiKVM }
 
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
@@ -83,6 +94,11 @@ func Parse(raw []byte) (*Config, error) {
 			d.v.Duration = d.def
 		}
 	}
+	for i := range c.Hosts {
+		if c.Hosts[i].Shutdown == "" {
+			c.Hosts[i].Shutdown = ShutdownOS
+		}
+	}
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
@@ -94,6 +110,7 @@ func (c *Config) validate() error {
 		return errors.New("no hosts configured")
 	}
 	seen := map[string]bool{}
+	pikvms := map[string]string{}
 	for i, h := range c.Hosts {
 		if h.Name == "" {
 			return fmt.Errorf("hosts[%d]: name is required", i)
@@ -105,13 +122,22 @@ func (c *Config) validate() error {
 		if err := c.validateProvider(h); err != nil {
 			return fmt.Errorf("host %q: %w", h.Name, err)
 		}
+		if !h.UsesPiKVM() {
+			continue
+		}
+		// The ATX API has no target host: sharing a URL would press the wrong machine's button.
+		key := strings.ToLower(strings.TrimRight(h.PiKVMURL, "/"))
+		if other, ok := pikvms[key]; ok {
+			return fmt.Errorf("hosts %q and %q have the same pikvmURL", other, h.Name)
+		}
+		pikvms[key] = h.Name
 	}
 	return nil
 }
 
 func (c *Config) validateProvider(h Host) error {
-	switch h.Provider {
-	case ProviderMikrotik:
+	switch h.Wake {
+	case WakeMikrotik:
 		if !validURL(c.Mikrotik.URL) {
 			return errors.New("mikrotik.url must be set to an absolute URL")
 		}
@@ -121,15 +147,22 @@ func (c *Config) validateProvider(h Host) error {
 		if h.Interface == "" {
 			return errors.New("interface is required")
 		}
-		if ip := net.ParseIP(h.Address); ip == nil || ip.To4() == nil {
-			return fmt.Errorf("address %q is not an IPv4 address", h.Address)
-		}
-	case ProviderPiKVM:
+	case WakePiKVM:
+	default:
+		return fmt.Errorf("unknown wake provider %q", h.Wake)
+	}
+	if h.Shutdown != ShutdownOS && h.Shutdown != ShutdownPiKVM {
+		return fmt.Errorf("unknown shutdown provider %q", h.Shutdown)
+	}
+	if h.UsesPiKVM() {
 		if !validURL(h.PiKVMURL) {
 			return errors.New("pikvmURL must be set to an absolute URL")
 		}
-	default:
-		return fmt.Errorf("unknown provider %q", h.Provider)
+		return nil
+	}
+	// Without a PiKVM, ICMP is the only way to confirm the host is down.
+	if ip := net.ParseIP(h.Address); ip == nil || ip.To4() == nil {
+		return fmt.Errorf("address %q is not an IPv4 address", h.Address)
 	}
 	return nil
 }
