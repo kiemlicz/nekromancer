@@ -145,6 +145,41 @@ func TestLiveMatchingNodeSuppressesWake(t *testing.T) {
 	}
 }
 
+func TestNotReadyNodeIsWakeable(t *testing.T) {
+	e := newWakeEnv(t, pendingPod(func(p *corev1.Pod) {
+		p.Spec.NodeSelector = map[string]string{"kubernetes.io/hostname": "mini1"}
+	}), managedNode("mini1", notReadyFor(time.Hour)))
+	if _, err := e.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if e.wakes("mini1") != 1 {
+		t.Fatalf("wakes = %d", e.wakes("mini1"))
+	}
+}
+
+func TestReadyCandidateSuppressesWakingNotReadyOne(t *testing.T) {
+	e := newWakeEnv(t, pendingPod(), managedNode("mini1", notReadyFor(time.Hour)), managedNode("mini2"))
+	if _, err := e.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if e.wakes("mini1") != 0 || e.wakes("mini2") != 0 {
+		t.Fatalf("wakes %d %d", e.wakes("mini1"), e.wakes("mini2"))
+	}
+}
+
+// power-state=off is still pending, waking would only have it shut down again.
+func TestNotReadyHostWithPendingPowerOffIsNotWoken(t *testing.T) {
+	e := newWakeEnv(t, pendingPod(func(p *corev1.Pod) {
+		p.Spec.NodeSelector = map[string]string{"kubernetes.io/hostname": "mini1"}
+	}), managedNode("mini1", notReadyFor(time.Hour), annotated(nodes.AnnotationPowerState, nodes.PowerStateOff)))
+	if _, err := e.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if e.wakes("mini1") != 0 {
+		t.Fatalf("wakes = %d", e.wakes("mini1"))
+	}
+}
+
 func TestHostShuttingDownIsNotWokenButOtherIs(t *testing.T) {
 	e := newWakeEnv(t, pendingPod(), managedNode("mini1", annotated(nodes.AnnotationPowerState, nodes.PowerStateOff)))
 	if _, err := e.reconcile(); err != nil {

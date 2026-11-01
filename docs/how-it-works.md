@@ -50,13 +50,14 @@ stateDiagram-v2
     Draining --> PoweringOff: drained, shutdown-requested stamped
     PoweringOff --> PoweringOff: still online after powerOffRetry, request again
     PoweringOff --> Deleted: host confirmed offline
-    Draining --> Deleted: NotReady and confirmed offline
     Busy --> NotReady: Ready condition lost
     Idle --> NotReady: Ready condition lost
     NotReady --> Busy: Ready again, workload pods present
-    NotReady --> Idle: Ready again, no workload pods
-    NotReady --> Draining: admin sets power-state to off
-    NotReady --> Deleted: grace passed and confirmed offline
+    NotReady --> Idle: Ready again, no workload pods, timer restarted
+    NotReady --> WaitingForReady: admin sets power-state to off
+    Draining --> WaitingForReady: Ready condition lost
+    WaitingForReady --> Draining: Ready again
+    PoweringOff --> PoweringOff: NotReady, still probed
     Deleted --> [*]
 ```
 
@@ -152,7 +153,9 @@ A probe error counts as online, so uncertainty never deletes a Node.
 
 ## Use case 3: physical power button
 
-Nekromancer needs no help from the host here. It sees the Node lose Ready and checks the host itself.
+Nekromancer doesn't act on this. A host that was switched off and one that is cut off by a network partition look the same,
+and deleting the Node of a running host would let its pods start elsewhere while the originals still run.
+So the Node stays `NotReady`, and the only change is to the idle timer and to what can be woken.
 
 ```mermaid
 sequenceDiagram
@@ -162,27 +165,28 @@ sequenceDiagram
     participant CM as Node lifecycle controller
     participant API as Kubernetes API
     participant NR as Node reconciler
+    participant WR as Wake reconciler
 
     Person->>Host: press power button
     Host->>Host: graceful shutdown
     Note over Host,CM: kubelet stops reporting
-    CM->>API: set Ready=Unknown
+    CM->>API: set Ready=Unknown, taint unreachable
     API-->>NR: Node updated
-    Note over NR: wait for the rest of notReadyGrace
-
-    loop every 30s until confirmed offline
-        NR->>Host: probe, ICMP or PiKVM power LED
-    end
-
-    NR->>API: delete Node, UID precondition
+    NR->>API: remove idle-since, if stamped
+    Note over NR: Node kept, nothing else happens
+    CM->>API: evict pods, 5 minutes by default
+    API-->>WR: replacement pod pending
+    WR->>Host: wake, as in use case 4
+    Host->>API: kubelet updates the same Node
+    API-->>NR: Ready again
 ```
 
-If a host-side script also sets `power-state=off`, the shutdown branch runs instead.
-Once the Node is NotReady it probes before draining, because a dead kubelet would never finish terminating pods.
+If `power-state=off` is set on a NotReady Node, it's cordoned and the shutdown waits for Ready.
+The host can't see a request until then, so its silence wouldn't prove it had shut down.
 
 ## Use case 4: resurrection
 
-The Node no longer exists, so the pending pod is the only signal.
+The Node is gone or NotReady, so the pending pod is the only signal.
 Its `nodeSelector` and required node affinity are matched against the static inventory.
 
 ```mermaid
@@ -201,7 +205,7 @@ sequenceDiagram
     WR->>WR: match pod against inventory labels
     WR->>API: get Node of each matching host
 
-    alt a matching host has a live Node
+    alt a matching host has a Ready Node
         Note over WR: no wake, recheck in 30s
     else a wakeable host is in its cooldown
         Note over WR: no wake, recheck in 30s
@@ -211,11 +215,11 @@ sequenceDiagram
         loop least recently tried first, until one call succeeds
             WR->>Prov: POST /rest/tool/wol or /api/atx/power?action=on
         end
-        Prov->>Host: magic packet or ATX power on
+        Prov->>Host: magic packet, or ATX power on unless the LED is on
         Note over WR: start cooldown, recheck in 30s
         Host->>Host: boot
-        Host->>API: kubelet registers a fresh Node with its labels
-        Sched->>API: bind pod to the new Node
+        Host->>API: kubelet registers a fresh Node, or updates a NotReady one
+        Sched->>API: bind pod to the Node
     end
 ```
 

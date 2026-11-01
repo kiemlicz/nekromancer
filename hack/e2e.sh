@@ -121,7 +121,6 @@ cat >"$TMP/values.yaml" <<YAML
 image: {repository: nekromancer, tag: e2e, pullPolicy: Never}
 config:
   defaultIdleTimeout: 15s
-  notReadyGrace: 10s
   wakeCooldown: 30s
   powerOffRetry: 1h
   mikrotik: {url: "http://fake-routeros.nekromancer.svc"}
@@ -198,7 +197,22 @@ step "use case 3: host goes down on its own"
 docker start "$HOST" >/dev/null
 wait_for "node re-registered" 'kubectl get node "$HOST"'
 kubectl rollout status deployment/plex --timeout=240s
+uid=$(kubectl get node "$HOST" -o jsonpath='{.metadata.uid}')
 docker stop "$HOST" >/dev/null
-wait_for "node deleted without any annotation" '! kubectl get node "$HOST"'
+wait_for "node NotReady" '[ "$(kubectl get node "$HOST" -o jsonpath="{.status.conditions[?(@.type==\"Ready\")].status}")" != True ]'
+wait_for "scheduler avoids it" 'kubectl get node "$HOST" -o jsonpath="{.spec.taints[*].key}" | grep -q unreachable'
+sleep 20
+[ "$(kubectl get node "$HOST" -o jsonpath='{.metadata.uid}')" = "$uid" ] || { echo "node deleted"; exit 1; }
+[ -z "$(annotation power-state)" ] || { echo "shutdown requested on a NotReady node"; exit 1; }
+echo "ok: silent host keeps its NotReady node"
+wakes() { kubectl -n nekromancer logs fake-routeros | grep -c "/rest/tool/wol.*AA:BB:CC:DD:EE:01" || true; }
+before=$(wakes)
+kubectl delete pod -l app=plex --force --grace-period=0
+wait_for "pending pod wakes the NotReady host" '[ "$(wakes)" -gt "$before" ]'
+docker start "$HOST" >/dev/null
+wait_for "node Ready again" '[ "$(kubectl get node "$HOST" -o jsonpath="{.status.conditions[?(@.type==\"Ready\")].status}")" = True ]'
+[ "$(kubectl get node "$HOST" -o jsonpath='{.metadata.uid}')" = "$uid" ] || { echo "node was recreated"; exit 1; }
+kubectl rollout status deployment/plex --timeout=240s
+echo "ok: pod running on the same node"
 
 step "PASS"

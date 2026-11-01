@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -229,44 +230,15 @@ func TestPowersOffOnlyTheProviderNamedAfterTheNode(t *testing.T) {
 	}
 }
 
-// --- use case 3: physical power button
+// --- host went down on its own, or is cut off: the two look the same from here
 
-func TestNotReadyWithinGraceWaits(t *testing.T) {
-	e := newEnv(t, managedNode("mini1", notReadyFor(20*time.Second)))
-	e.provider.offline = true
-	res := e.reconcile()
-	if e.node() == nil {
-		t.Fatal("deleted inside grace period")
-	}
-	if res.RequeueAfter != 40*time.Second {
-		t.Fatalf("requeue = %v", res.RequeueAfter)
-	}
-}
-
-func TestNotReadyAndOfflineDeletesNode(t *testing.T) {
-	e := newEnv(t, managedNode("mini1", notReadyFor(time.Minute)))
+func TestNotReadyKeepsNodeEvenWhenHostIsSilent(t *testing.T) {
+	e := newEnv(t, managedNode("mini1", notReadyFor(24*time.Hour)), workload("app", "mini1"))
 	e.provider.offline = true
 	e.reconcile()
-	if e.node() != nil {
-		t.Fatal("node not deleted")
-	}
-}
-
-func TestNotReadyButReachableKeepsNode(t *testing.T) {
-	e := newEnv(t, managedNode("mini1", notReadyFor(time.Hour)))
-	res := e.reconcile()
-	if e.node() == nil || res.RequeueAfter == 0 {
-		t.Fatalf("node=%v requeue=%v", e.node(), res.RequeueAfter)
-	}
-}
-
-func TestNotReadyProbeErrorKeepsNode(t *testing.T) {
-	e := newEnv(t, managedNode("mini1", notReadyFor(time.Hour)))
-	e.provider.offline = true
-	e.provider.offlineErr = errProbe
-	e.reconcile()
-	if e.node() == nil {
-		t.Fatal("deleted on probe error")
+	got := e.node()
+	if got == nil || got.Spec.Unschedulable || !e.podExists("app") || e.provider.powerOffs != 0 {
+		t.Fatalf("NotReady node acted on: %+v", got)
 	}
 }
 
@@ -278,13 +250,49 @@ func TestNotReadyDoesNotStartIdleTimer(t *testing.T) {
 	}
 }
 
-// A dead kubelet never finishes terminating pods, so waiting for the drain would hang forever.
-func TestAnnotatedAndOfflineSkipsDrain(t *testing.T) {
-	p := workload("app", "mini1")
-	now := metav1.NewTime(t0)
-	p.DeletionTimestamp = &now
-	p.Finalizers = []string{"test/hold"}
-	e := newEnv(t, managedNode("mini1", off(), notReadyFor(time.Second)), p)
+// A stamp surviving the outage would reap the host as soon as it returns.
+func TestNotReadyClearsIdleSince(t *testing.T) {
+	e := newEnv(t, managedNode("mini1", notReadyFor(time.Hour), annotated(nodes.AnnotationIdleSince, stamp(t0.Add(-2*time.Hour)))))
+	e.reconcile()
+	if got, ok := e.node().Annotations[nodes.AnnotationIdleSince]; ok {
+		t.Fatalf("idle-since kept: %q", got)
+	}
+}
+
+// A partitioned host never sees the request, and its silence proves nothing.
+func TestPowerOffOnNotReadyNodeWaitsForReady(t *testing.T) {
+	e := newEnv(t, managedNode("mini1", off(), notReadyFor(time.Hour)), workload("app", "mini1"))
+	e.provider.offline = true
+	e.reconcile()
+	got := e.node()
+	if got == nil {
+		t.Fatal("deleted a node whose host was never asked to shut down")
+	}
+	if got.Annotations[nodes.AnnotationShutdownRequested] != "" || e.provider.powerOffs != 0 {
+		t.Fatalf("requested shutdown while NotReady: %v", got.Annotations)
+	}
+	if !e.podExists("app") {
+		t.Fatal("drained while NotReady")
+	}
+}
+
+func TestPowerOffProceedsOnceReadyAgain(t *testing.T) {
+	e := newEnv(t, managedNode("mini1", off(), notReadyFor(time.Hour)))
+	e.reconcile()
+	n := e.node()
+	n.Status.Conditions[0].Status = corev1.ConditionTrue
+	if err := e.client.Status().Update(context.Background(), n); err != nil {
+		t.Fatal(err)
+	}
+	e.reconcile()
+	if e.node().Annotations[nodes.AnnotationShutdownRequested] == "" || e.provider.powerOffs != 1 {
+		t.Fatal("shutdown not requested after Ready returned")
+	}
+}
+
+// The kubelet dies during a requested shutdown, so this is the normal way out.
+func TestRequestedAndOfflineDeletesNotReadyNode(t *testing.T) {
+	e := newEnv(t, managedNode("mini1", off(), notReadyFor(time.Minute), annotated(nodes.AnnotationShutdownRequested, stamp(t0))))
 	e.provider.offline = true
 	e.reconcile()
 	if e.node() != nil {

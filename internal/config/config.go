@@ -25,8 +25,6 @@ const (
 
 type Config struct {
 	DefaultIdleTimeout metav1.Duration `json:"defaultIdleTimeout"`
-	// NotReadyGrace debounces kubelet blips before the host is probed.
-	NotReadyGrace metav1.Duration `json:"notReadyGrace"`
 	// WakeCooldown is how long a woken host gets to register before another attempt.
 	WakeCooldown metav1.Duration `json:"wakeCooldown"`
 	// PowerOffRetry is how long a host may stay online before power off is requested again.
@@ -83,7 +81,6 @@ func Parse(raw []byte) (*Config, error) {
 		def  time.Duration
 	}{
 		{"defaultIdleTimeout", &c.DefaultIdleTimeout, 10 * time.Minute},
-		{"notReadyGrace", &c.NotReadyGrace, time.Minute},
 		{"wakeCooldown", &c.WakeCooldown, 5 * time.Minute},
 		{"powerOffRetry", &c.PowerOffRetry, 2 * time.Minute},
 	} {

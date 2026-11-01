@@ -52,14 +52,14 @@ func IdleTimeout(n *corev1.Node, def time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
-// Ready reports the Ready condition and when it last changed.
-func Ready(n *corev1.Node) (bool, time.Time) {
+// Ready reports the Ready condition.
+func Ready(n *corev1.Node) bool {
 	for _, c := range n.Status.Conditions {
 		if c.Type == corev1.NodeReady {
-			return c.Status == corev1.ConditionTrue, c.LastTransitionTime.Time
+			return c.Status == corev1.ConditionTrue
 		}
 	}
-	return false, n.CreationTimestamp.Time
+	return false
 }
 
 func IsDaemonSetPod(p *corev1.Pod) bool {

@@ -31,7 +31,18 @@ func (p *PiKVM) press(ctx context.Context, action string) error {
 	return err
 }
 
-func (p *PiKVM) PowerOn(ctx context.Context) error { return p.press(ctx, "on") }
+// PowerOn checks the LED first: NotReady hosts get woken and may be running,
+// and a click would shut them down.
+func (p *PiKVM) PowerOn(ctx context.Context) error {
+	off, err := p.Offline(ctx)
+	if err != nil {
+		return err
+	}
+	if !off {
+		return nil
+	}
+	return p.press(ctx, "on")
+}
 
 // PowerOff checks the LED first: "off" emulates a button click, which must
 // not reach a host that is already down.

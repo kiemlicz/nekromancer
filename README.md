@@ -10,8 +10,8 @@ See [how it works](docs/how-it-works.md) for sequence diagrams.
 |---|---|
 | Node has no workload pods for the idle timeout | `idle-since` stamped, then `power-state=off`, then the shutdown below |
 | `kubectl annotate node <node> nekromancer.kiemlicz.github.io/power-state=off` | Cordon, drain, power off, verify offline, delete the Node |
-| Physical power button, or any other host-side shutdown | Node goes `NotReady`, host verified offline, Node deleted |
-| Pending, `Unschedulable` pod whose selector matches an inventory host | Host woken, kubelet registers a fresh Node, scheduler binds the pod |
+| Physical power button, or any other host-side shutdown | Nothing. The Node stays `NotReady`, and the host can still be woken |
+| Pending, `Unschedulable` pod whose selector matches an inventory host | Host woken, kubelet registers or updates its Node, scheduler binds the pod |
 
 ## Labels and annotations
 
@@ -33,7 +33,8 @@ Labels must be set through kubelet flags, because the Node object is deleted on 
   The node-agent checks this independently.
 - A managed node missing from the inventory is ignored and gets a warning event.
   Without an inventory entry it can't be powered off or verified.
-- A Node is only deleted after the host is confirmed down. A probe error counts as online.
+- A Node is only deleted after a requested shutdown, once the host is confirmed down. A probe error counts as online.
+- A `NotReady` Node is never deleted or shut down: a host that was switched off and one that is cut off look the same.
 - Power off waits for the drain.
   PodDisruptionBudgets are honoured, so a blocked eviction retries indefinitely rather than forcing anything.
 - The chart keeps the controller off managed nodes, so it can't power off its own host.
@@ -71,7 +72,7 @@ config:
 helm install nekromancer oci://ghcr.io/<owner>/charts/nekromancer --version 1.2.3 -n nekromancer --create-namespace -f values.yaml
 ```
 
-Other settings, with defaults: `notReadyGrace: 1m`, `wakeCooldown: 5m`, `powerOffRetry: 2m`, and `pikvm.insecureSkipVerify` / `pikvm.caFile`.
+Other settings, with defaults: `wakeCooldown: 5m`, `powerOffRetry: 2m`, and `pikvm.insecureSkipVerify` / `pikvm.caFile`.
 
 The RouterOS user needs the `rest-api` policy and rights to run `/tool/wol`.
 
@@ -82,7 +83,7 @@ Each host picks how it wakes and how it shuts down separately.
 | `wake` | Call |
 |---|---|
 | `mikrotik` | `POST /rest/tool/wol` |
-| `pikvm` | `POST /api/atx/power?action=on` |
+| `pikvm` | `POST /api/atx/power?action=on`, skipped if the power LED is already on |
 
 | `shutdown` | How |
 |---|---|
@@ -116,14 +117,17 @@ To build locally, run `make image IMAGE=<registry>/nekromancer:dev`.
 
 - **Waking:** pods with no `nodeSelector` or required node affinity never wake anything,
   because being unschedulable isn't a placement problem for them.
-- **One host at a time:** if any matching host already has a live Node, nothing else is woken, even if that host is full.
+- **One host at a time:** if any matching host already has a Ready Node, nothing else is woken, even if that host is full.
   This prevents a wake and reap loop for pods that a second machine wouldn't help.
   With several matching hosts, the least recently tried is woken after `wakeCooldown`.
 - **Cancelling:** removing `power-state` before the host goes down stops the shutdown if the agent hasn't acted yet,
   but the node stays cordoned. Run `kubectl uncordon` yourself.
-- **False offline:** if a host blocks ICMP or is cut off from the controller while `NotReady`, it looks offline and its Node gets deleted.
-  A kubelet generally doesn't re-register until restarted, and WoL won't help a running host.
-  Allow ICMP from the controller to each host, or use PiKVM.
+- **Hosts switched off by hand:** the pods stay on the `NotReady` Node until Kubernetes evicts them, 5 minutes by default.
+  Only then does a replacement go pending and wake the host, and pods of a StatefulSet wait for an admin.
+- **`power-state=off` on a `NotReady` Node:** the shutdown waits for Ready, and that host isn't woken for pending pods.
+  If the host was off, it shuts down again after its next manual boot. To cancel, remove the annotation and run `kubectl uncordon`.
+- **False offline:** if a host blocks ICMP during a requested shutdown, it looks offline as soon as the request is sent, so its Node is deleted.
+  If the shutdown then failed, the host keeps running without a Node. Allow ICMP from the controller to each host, or use PiKVM.
 - **Bare pods:** a manual shutdown evicts them too, and nothing recreates them.
 
 ## Development

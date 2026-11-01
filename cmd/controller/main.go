@@ -70,7 +70,6 @@ func run() error {
 		Client: mgr.GetClient(), Recorder: recorder, Clock: clock.RealClock{},
 		Providers:          providers,
 		DefaultIdleTimeout: cfg.DefaultIdleTimeout.Duration,
-		NotReadyGrace:      cfg.NotReadyGrace.Duration,
 		PowerOffRetry:      cfg.PowerOffRetry.Duration,
 	}).SetupWithManager(ctx, mgr); err != nil {
 		return err

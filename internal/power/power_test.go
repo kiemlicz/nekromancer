@@ -85,6 +85,27 @@ func TestPiKVMPowerOn(t *testing.T) {
 	}
 }
 
+// NotReady hosts get woken and may be running, a press there would shut them down.
+func TestPiKVMPowerOnSkipsPressWhenAlreadyOn(t *testing.T) {
+	p, actions := pikvm(t, ledOn, 200)
+	if err := p.PowerOn(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(*actions) != 0 {
+		t.Errorf("actions = %v", *actions)
+	}
+}
+
+func TestPiKVMPowerOnFailsWhenStateUnknown(t *testing.T) {
+	p, actions := pikvm(t, `{}`, 500)
+	if err := p.PowerOn(context.Background()); err == nil {
+		t.Fatal("want error")
+	}
+	if len(*actions) != 0 {
+		t.Errorf("actions = %v", *actions)
+	}
+}
+
 func TestPiKVMPowerOffPressesWhenOn(t *testing.T) {
 	p, actions := pikvm(t, ledOn, 200)
 	if err := p.PowerOff(context.Background()); err != nil {
@@ -175,13 +196,13 @@ func TestICMPOfflineForSilentAddress(t *testing.T) {
 }
 
 // recorder fakes one PiKVM and counts the presses it receives.
-func recorder(t *testing.T) (string, *[]string) {
+func recorder(t *testing.T, led string) (string, *[]string) {
 	t.Helper()
 	var actions []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/atx":
-			_, _ = w.Write([]byte(ledOn))
+			_, _ = w.Write([]byte(led))
 		case "POST /api/atx/power":
 			actions = append(actions, r.URL.Query().Get("action"))
 			_, _ = w.Write([]byte(`{"ok":true,"result":{}}`))
@@ -193,8 +214,8 @@ func recorder(t *testing.T) (string, *[]string) {
 
 // A press on the wrong PiKVM would power off the wrong machine.
 func TestBuildPressesOnlyThatHostsPiKVM(t *testing.T) {
-	urlA, a := recorder(t)
-	urlB, b := recorder(t)
+	urlA, a := recorder(t, ledOn)
+	urlB, b := recorder(t, ledOn)
 	got, err := Build(&config.Config{Hosts: []config.Host{
 		{Name: "a", Wake: config.WakePiKVM, Shutdown: config.ShutdownPiKVM, PiKVMURL: urlA},
 		{Name: "b", Wake: config.WakePiKVM, Shutdown: config.ShutdownPiKVM, PiKVMURL: urlB},
@@ -212,7 +233,7 @@ func TestBuildPressesOnlyThatHostsPiKVM(t *testing.T) {
 
 // The node-agent runs the command on these hosts. A press as well would race it.
 func TestBuildOSShutdownNeverPresses(t *testing.T) {
-	url, actions := recorder(t)
+	url, actions := recorder(t, ledOn)
 	got, err := Build(&config.Config{Hosts: []config.Host{
 		{Name: "a", Wake: config.WakePiKVM, Shutdown: config.ShutdownOS, PiKVMURL: url},
 	}}, Credentials{})
@@ -225,6 +246,16 @@ func TestBuildOSShutdownNeverPresses(t *testing.T) {
 	if len(*actions) != 0 {
 		t.Fatalf("actions = %v", *actions)
 	}
+}
+
+func TestBuildWakesOverPiKVMWithOSShutdown(t *testing.T) {
+	url, actions := recorder(t, ledOff)
+	got, err := Build(&config.Config{Hosts: []config.Host{
+		{Name: "a", Wake: config.WakePiKVM, Shutdown: config.ShutdownOS, PiKVMURL: url},
+	}}, Credentials{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := got["a"].PowerOn(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +265,7 @@ func TestBuildOSShutdownNeverPresses(t *testing.T) {
 }
 
 func TestBuildWakesOverMikrotikAndShutsDownOverPiKVM(t *testing.T) {
-	url, actions := recorder(t)
+	url, actions := recorder(t, ledOn)
 	wol := 0
 	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		wol++
@@ -260,7 +291,7 @@ func TestBuildWakesOverMikrotikAndShutsDownOverPiKVM(t *testing.T) {
 }
 
 func TestBuildProbesLEDOnlyWhenWiredToPiKVM(t *testing.T) {
-	url, _ := recorder(t)
+	url, _ := recorder(t, ledOn)
 	got, err := Build(&config.Config{Hosts: []config.Host{
 		{Name: "atx", Wake: config.WakePiKVM, Shutdown: config.ShutdownOS, PiKVMURL: url},
 		{Name: "wol", Wake: config.WakeMikrotik, Shutdown: config.ShutdownOS, Address: "127.0.0.1"},

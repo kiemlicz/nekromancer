@@ -105,7 +105,6 @@ func newEnv(t *testing.T, objs ...client.Object) *env {
 		Client: c, Recorder: rec, Clock: clk,
 		Providers:          map[string]power.Provider{"mini1": p},
 		DefaultIdleTimeout: 10 * time.Minute,
-		NotReadyGrace:      time.Minute,
 		PowerOffRetry:      2 * time.Minute,
 	}}
 }

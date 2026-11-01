@@ -46,20 +46,17 @@ func TestIdleTimeout(t *testing.T) {
 }
 
 func TestReady(t *testing.T) {
-	at := metav1.NewTime(time.Unix(1000, 0))
-	created := metav1.NewTime(time.Unix(500, 0))
-	n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{CreationTimestamp: created}}
-
-	if ok, since := Ready(n); ok || !since.Equal(created.Time) {
-		t.Errorf("no condition: %v %v", ok, since)
+	n := &corev1.Node{}
+	if Ready(n) {
+		t.Error("no condition counts as ready")
 	}
-	n.Status.Conditions = []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionUnknown, LastTransitionTime: at}}
-	if ok, since := Ready(n); ok || !since.Equal(at.Time) {
-		t.Errorf("unknown: %v %v", ok, since)
+	n.Status.Conditions = []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionUnknown}}
+	if Ready(n) {
+		t.Error("Unknown counts as ready")
 	}
 	n.Status.Conditions[0].Status = corev1.ConditionTrue
-	if ok, _ := Ready(n); !ok {
-		t.Error("true: not ready")
+	if !Ready(n) {
+		t.Error("True does not count as ready")
 	}
 }
 

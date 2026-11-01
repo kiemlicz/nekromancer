@@ -30,7 +30,7 @@ func TestParseAppliesDefaults(t *testing.T) {
 	if c.DefaultIdleTimeout.Duration != 10*time.Minute {
 		t.Errorf("idle timeout = %v", c.DefaultIdleTimeout.Duration)
 	}
-	if c.NotReadyGrace.Duration != time.Minute || c.WakeCooldown.Duration != 5*time.Minute || c.PowerOffRetry.Duration != 2*time.Minute {
+	if c.WakeCooldown.Duration != 5*time.Minute || c.PowerOffRetry.Duration != 2*time.Minute {
 		t.Errorf("defaults = %+v", c)
 	}
 	if c.Hosts[0].Labels["workload"] != "plex" {

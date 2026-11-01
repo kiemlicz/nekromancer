@@ -30,7 +30,7 @@ const pendingPoll = 30 * time.Second
 
 // WakeReconciler powers on a host for pods that nothing can schedule.
 //
-// Hosts with a live Node suppress waking: the pod may be blocked by something a
+// Hosts with a Ready Node suppress waking: the pod may be blocked by something a
 // second machine would not fix, which would otherwise flap wake and idle reap.
 type WakeReconciler struct {
 	client.Client
@@ -134,8 +134,9 @@ func (r *WakeReconciler) matchingHosts(ctx context.Context, pod *corev1.Pod) ([]
 	return out, nil
 }
 
-// wakeable returns candidates without a Node, or nil when any candidate has a
-// live one. A Node mid power off is skipped: it can be woken once it is gone.
+// wakeable returns candidates without a Node or with a NotReady one, or nil when
+// any candidate is Ready. Waking a host that is merely cut off does nothing.
+// A Node mid power off is skipped: it can be woken once it is gone.
 func (r *WakeReconciler) wakeable(ctx context.Context, candidates []config.Host) ([]config.Host, error) {
 	var out []config.Host
 	for _, h := range candidates {
@@ -146,8 +147,11 @@ func (r *WakeReconciler) wakeable(ctx context.Context, candidates []config.Host)
 			out = append(out, h)
 		case err != nil:
 			return nil, err
-		case !nodes.PowerOffRequested(&node):
+		case nodes.PowerOffRequested(&node):
+		case nodes.Ready(&node):
 			return nil, nil
+		default:
+			out = append(out, h)
 		}
 	}
 	return out, nil

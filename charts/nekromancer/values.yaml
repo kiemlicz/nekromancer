@@ -13,7 +13,6 @@ agent:
 # Inventory, see README. Host names must equal Node names.
 config:
   defaultIdleTimeout: 10m
-  notReadyGrace: 1m
   wakeCooldown: 5m
   powerOffRetry: 2m
   mikrotik:

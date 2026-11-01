@@ -84,7 +84,7 @@ func TestLifecycleAgainstAPIServer(t *testing.T) {
 	t.Cleanup(cancel)
 	if err := (&NodeReconciler{
 		Client: mgr.GetClient(), Recorder: mgr.GetEventRecorder("nekromancer"), Clock: clock.RealClock{},
-		Providers: providers, DefaultIdleTimeout: 2 * time.Second, NotReadyGrace: time.Second, PowerOffRetry: time.Minute,
+		Providers: providers, DefaultIdleTimeout: 2 * time.Second, PowerOffRetry: time.Minute,
 	}).SetupWithManager(ctx, mgr); err != nil {
 		t.Fatal(err)
 	}
