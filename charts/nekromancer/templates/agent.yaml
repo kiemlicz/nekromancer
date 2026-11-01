@@ -23,10 +23,9 @@ spec:
         app.kubernetes.io/component: agent
     spec:
       serviceAccountName: {{ .Release.Name }}-agent
-      hostPID: true
       nodeSelector:
         nekromancer.kiemlicz.github.io/managed: "true"
-      # Privileged, so only on hosts that shut down through it.
+      # Only hosts that shut down through it, the rest must not get a second shutdown.
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -47,9 +46,19 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
-        # Entering PID 1's namespaces to run shutdown needs all of this.
+        # logind authorises PowerOff for uid 0, no capabilities are needed.
         securityContext:
           runAsUser: 0
-          privileged: true
+          allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: system-bus
+          mountPath: /run/dbus/system_bus_socket
+      volumes:
+      - name: system-bus
+        hostPath:
+          path: {{ .Values.agent.systemBusSocket }}
+          type: Socket
 {{- end }}

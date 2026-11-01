@@ -2,12 +2,10 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
-	"time"
 
+	"github.com/godbus/dbus/v5"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -15,8 +13,6 @@ import (
 
 	"gitlab.l3a.dev/infra/nekromancer/internal/nodes"
 )
-
-const commandTimeout = 30 * time.Second
 
 // Reconciler watches only its own Node, so the agent needs no network listener.
 type Reconciler struct {
@@ -49,21 +45,18 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).Named("agent").For(&corev1.Node{}).Complete(r)
 }
 
-// HostShutdown runs the host's own shutdown command from inside its namespaces,
-// so kubelet graceful shutdown and everything else on the host see a regular shutdown.
-var HostShutdown = Command{Argv: []string{"/nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--", "shutdown", "-h", "now"}}
-
-// Command powers off by running a program.
-type Command struct {
-	Argv []string
+// Logind requests a graceful shutdown over the system bus. Going through logind
+// honours delay inhibitors, which is what kubelet graceful shutdown relies on.
+type Logind struct {
+	Address string
 }
 
-func (c Command) PowerOff(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...).CombinedOutput()
+func (l Logind) PowerOff(ctx context.Context) error {
+	conn, err := dbus.Connect(l.Address, dbus.WithContext(ctx))
 	if err != nil {
-		return fmt.Errorf("%v: %w: %s", c.Argv, err, bytes.TrimSpace(out))
+		return fmt.Errorf("connecting to %s: %w", l.Address, err)
 	}
-	return nil
+	defer conn.Close()
+	obj := conn.Object("org.freedesktop.login1", "/org/freedesktop/login1")
+	return obj.CallWithContext(ctx, "org.freedesktop.login1.Manager.PowerOff", 0, false).Err
 }

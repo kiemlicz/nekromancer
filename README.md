@@ -37,8 +37,7 @@ Labels must be set through kubelet flags, because the Node object is deleted on 
 - Power off waits for the drain.
   PodDisruptionBudgets are honoured, so a blocked eviction retries indefinitely rather than forcing anything.
 - The chart keeps the controller off managed nodes, so it can't power off its own host.
-- The node-agent is privileged and shares the host's PID namespace, because it has to run `shutdown` on the host.
-  The chart only schedules it on inventory hosts with `shutdown: os`, so PiKVM shutdown hosts never run it.
+- The chart only schedules the node-agent on inventory hosts with `shutdown: os`, so a PiKVM shutdown host never gets a second shutdown.
 
 ## Install
 
@@ -87,7 +86,7 @@ Each host picks how it wakes and how it shuts down separately.
 
 | `shutdown` | How |
 |---|---|
-| `os` (default) | The node-agent runs `shutdown -h now` on the host |
+| `os` (default) | The node-agent calls logind `PowerOff` over the host's system bus, a graceful OS shutdown like `shutdown -h now`. Needs systemd |
 | `pikvm` | ATX soft press, `POST /api/atx/power?action=off`, skipped if the power LED is already off |
 
 A host using PiKVM for either is verified offline by its power LED. Any other host needs `address`, and is verified with 3 pings, 1s timeout each.
@@ -136,5 +135,6 @@ make e2e    # real image and chart on a throwaway kind cluster, needs Docker
 ```
 
 `make e2e` uses its own kubeconfig and never touches your current context.
-kind nodes have no `shutdown` binary, so a stub records that the node-agent ran it inside the host's namespaces, and `docker stop` stands in for the power going off.
-A real `shutdown -h now`, a real PiKVM and a real RouterOS are not exercised.
+`docker stop` stands in for a host powering off, and a stub plays RouterOS and the PiKVM.
+kind nodes have no system bus, so the node-agent's real power off is only covered by `internal/agent/logind_test.go`,
+which runs against a private bus with a fake logind.

@@ -3,6 +3,7 @@ module gitlab.l3a.dev/infra/nekromancer
 go 1.27.0
 
 require (
+	github.com/godbus/dbus/v5 v5.2.4
 	golang.org/x/net v0.62.0
 	k8s.io/api v0.37.2
 	k8s.io/apimachinery v0.37.2

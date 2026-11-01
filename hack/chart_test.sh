@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks which hosts the privileged node-agent lands on.
+# Checks where the node-agent lands and that it stays unprivileged.
 set -euo pipefail
 
 fail() { echo "FAIL: $*"; exit 1; }
@@ -16,6 +16,9 @@ YAML
 )
 names=$(agent <<<"$mixed" | yq -r '.spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchFields[0].values | join(",")')
 [ "$names" = wol1,wol2 ] || fail "agent targets '$names'"
+[ "$(agent <<<"$mixed" | yq '.spec.template.spec.hostPID // false')" = false ] || fail "agent shares the host PID namespace"
+[ "$(agent <<<"$mixed" | yq '.spec.template.spec.containers[0].securityContext.privileged // false')" = false ] || fail "agent is privileged"
+[ "$(agent <<<"$mixed" | yq '.spec.template.spec.volumes[0].hostPath.path')" = /run/dbus/system_bus_socket ] || fail "agent has no system bus"
 
 only_atx=$(render <<'YAML'
 config:

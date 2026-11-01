@@ -14,7 +14,7 @@ flowchart LR
     API[("Kubernetes API")]
     subgraph host["Managed host"]
         AG["node-agent DaemonSet, shutdown: os hosts only"]
-        OS["Host OS"]
+        LD["logind"]
         KL["kubelet"]
     end
     MT["MikroTik router"]
@@ -24,7 +24,7 @@ flowchart LR
     WR <-->|"watch pending pods, read nodes"| API
     AG <-->|"watch own Node"| API
     KL <-->|"register Node, run pods"| API
-    AG -->|"shutdown -h now, through nsenter"| OS
+    AG -->|"PowerOff over D-Bus"| LD
     WR -->|"WoL request"| MT
     MT -.->|"magic packet"| host
     WR -->|"ATX power on"| PK
@@ -121,7 +121,7 @@ sequenceDiagram
     alt shutdown is os
         API-->>AG: own Node updated
         AG->>AG: check managed, not control plane, power-state=off
-        AG->>Host: shutdown -h now, through nsenter
+        AG->>Host: logind PowerOff over D-Bus
     else shutdown is pikvm
         Note over AG: not scheduled on this host
         NR->>PK: GET /api/atx

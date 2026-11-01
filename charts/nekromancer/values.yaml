@@ -7,6 +7,9 @@ image:
 # PIKVM_USERNAME and PIKVM_PASSWORD. Credentials never go in values.
 credentialsSecret: nekromancer-credentials
 
+agent:
+  systemBusSocket: /run/dbus/system_bus_socket
+
 # Inventory, see README. Host names must equal Node names.
 config:
   defaultIdleTimeout: 10m
