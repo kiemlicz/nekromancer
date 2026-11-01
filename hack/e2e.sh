@@ -119,6 +119,10 @@ kubectl rollout status deployment/plex --timeout=180s
 step "install"
 cat >"$TMP/values.yaml" <<YAML
 image: {repository: nekromancer, tag: e2e, pullPolicy: Never}
+controller:
+  serviceAccount: {name: e2e-controller}
+  podLabels: {e2e: "true"}
+  resources: {requests: {cpu: 10m, memory: 32Mi}}
 config:
   defaultIdleTimeout: 15s
   wakeCooldown: 30s
@@ -148,9 +152,12 @@ wait_for "agent pod created" '[ -n "$(kubectl -n nekromancer get pod -l app.kube
 agents=$(kubectl -n nekromancer get pod -l app.kubernetes.io/component=agent -o jsonpath='{.items[*].spec.nodeName}')
 [ "$agents" = "$HOST" ] || { echo "agent runs on: $agents"; exit 1; }
 echo "ok: agent only on the os shutdown host"
-for sa in controller agent; do
-  kubectl auth can-i list nodes --as="system:serviceaccount:nekromancer:nekromancer-$sa" | grep -q yes
+for sa in e2e-controller nekromancer-agent; do
+  kubectl auth can-i list nodes --as="system:serviceaccount:nekromancer:$sa" | grep -q yes
 done
+# Core events are for leader election, events.k8s.io for the controller's own.
+kubectl auth can-i create events -n nekromancer --as=system:serviceaccount:nekromancer:e2e-controller | grep -q yes
+kubectl auth can-i create events.events.k8s.io --as=system:serviceaccount:nekromancer:e2e-controller | grep -q yes
 if kubectl auth can-i delete nodes --as=system:serviceaccount:nekromancer:nekromancer-agent 2>/dev/null | grep -q yes; then
   echo "agent can delete nodes"; exit 1
 fi
@@ -214,5 +221,9 @@ wait_for "node Ready again" '[ "$(kubectl get node "$HOST" -o jsonpath="{.status
 [ "$(kubectl get node "$HOST" -o jsonpath='{.metadata.uid}')" = "$uid" ] || { echo "node was recreated"; exit 1; }
 kubectl rollout status deployment/plex --timeout=240s
 echo "ok: pod running on the same node"
+
+step "no rejected events"
+if kubectl -n nekromancer logs deploy/nekromancer-controller | grep "Server rejected event"; then exit 1; fi
+echo "ok: API server accepted every event"
 
 step "PASS"

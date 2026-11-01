@@ -7,6 +7,7 @@ trap 'rm -rf "$OUT"' EXIT
 fail() { echo "FAIL: $*"; exit 1; }
 chart_sum() { find charts -type f -exec sha256sum {} + | sort; }
 BEFORE=$(chart_sum)
+BASE=$(sed -n 's/^version: //p' charts/nekromancer/Chart.yaml)
 
 # args: ref_type ref_name sha owner want_version want_app want_image
 check() {
@@ -19,9 +20,9 @@ check() {
 }
 
 check tag v1.2.3 abcdef1234567890 kiemlicz 1.2.3 1.2.3 ghcr.io/kiemlicz/nekromancer:1.2.3
-check branch main abcdef1234567890 kiemlicz 0.1.0-main-abcdef1 sha-abcdef1 ghcr.io/kiemlicz/nekromancer:sha-abcdef1
+check branch main abcdef1234567890 kiemlicz "$BASE-main-abcdef1" sha-abcdef1 ghcr.io/kiemlicz/nekromancer:sha-abcdef1
 # All digits with a leading zero is an invalid semver identifier unless joined to "main".
-check branch main 0123456789abcdef kiemlicz 0.1.0-main-0123456 sha-0123456 ghcr.io/kiemlicz/nekromancer:sha-0123456
+check branch main 0123456789abcdef kiemlicz "$BASE-main-0123456" sha-0123456 ghcr.io/kiemlicz/nekromancer:sha-0123456
 # GHCR rejects uppercase paths.
 check tag v1.2.3 abcdef1234567890 KieMlicz 1.2.3 1.2.3 ghcr.io/kiemlicz/nekromancer:1.2.3
 

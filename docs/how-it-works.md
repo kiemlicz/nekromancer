@@ -150,6 +150,7 @@ sequenceDiagram
 ```
 
 A probe error counts as online, so uncertainty never deletes a Node.
+A host with `pikvmPort` makes the same calls through the Switch API: `GET /api/switch`, then `POST /api/switch/atx/power?port=<index>&action=off`.
 
 ## Use case 3: physical power button
 

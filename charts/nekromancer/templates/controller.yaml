@@ -1,47 +1,52 @@
+{{- if .Values.controller.serviceAccount.create }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ .Release.Name }}-controller
+  name: {{ include "nekromancer.serviceAccountName" (dict "root" . "component" "controller") }}
   labels: {{- include "nekromancer.labels" . | nindent 4 }}
 ---
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ .Release.Name }}-controller
   labels: {{- include "nekromancer.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.controller.replicas }}
+  {{- with .Values.controller.strategy }}
+  strategy: {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "nekromancer.labels" . | nindent 6 }}
       app.kubernetes.io/component: controller
   template:
     metadata:
-      labels:
-        {{- include "nekromancer.labels" . | nindent 8 }}
-        app.kubernetes.io/component: controller
+      labels: {{- include "nekromancer.podLabels" (dict "root" . "component" "controller") | nindent 8 }}
       annotations:
         checksum/config: {{ toYaml .Values.config | sha256sum }}
+        {{- with .Values.controller.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
-      serviceAccountName: {{ .Release.Name }}-controller
+      serviceAccountName: {{ include "nekromancer.serviceAccountName" (dict "root" . "component" "controller") }}
+      {{- with .Values.controller.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
       # The controller must never run on a machine it can power off.
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-            - matchExpressions:
-              - key: nekromancer.kiemlicz.github.io/managed
-                operator: DoesNotExist
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
-        seccompProfile:
-          type: RuntimeDefault
-        # Lets the unprivileged ICMP probe open ping sockets.
-        sysctls:
-        - name: net.ipv4.ping_group_range
-          value: "65532 65532"
+      affinity: {{- include "nekromancer.affinity" (dict "affinity" .Values.controller.affinity "field" "matchExpressions" "guard" (list (dict "key" "nekromancer.kiemlicz.github.io/managed" "operator" "DoesNotExist"))) | nindent 8 }}
+      {{- with .Values.controller.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.controller.podSecurityContext }}
+      securityContext: {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
       - name: controller
         image: {{ include "nekromancer.image" . }}
@@ -58,15 +63,18 @@ spec:
         ports:
         - {name: metrics, containerPort: 8080}
         - {name: health, containerPort: 8081}
-        livenessProbe:
-          httpGet: {path: /healthz, port: health}
-        readinessProbe:
-          httpGet: {path: /readyz, port: health}
-        securityContext:
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          capabilities:
-            drop: ["ALL"]
+        {{- with .Values.controller.livenessProbe }}
+        livenessProbe: {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.controller.readinessProbe }}
+        readinessProbe: {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.controller.securityContext }}
+        securityContext: {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.controller.resources }}
+        resources: {{- toYaml . | nindent 10 }}
+        {{- end }}
         volumeMounts:
         - name: config
           mountPath: /etc/nekromancer

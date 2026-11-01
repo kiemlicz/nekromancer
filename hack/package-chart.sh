@@ -27,8 +27,8 @@ esac
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cp -r charts/nekromancer "$work/"
-sed -i "s|^  repository: nekromancer$|  repository: ghcr.io/$owner/nekromancer|" "$work/nekromancer/values.yaml"
-grep -q "repository: ghcr.io/$owner/nekromancer" "$work/nekromancer/values.yaml" || { echo "image repository not set" >&2; exit 1; }
+sed -i "s|^  repository: \"nekromancer\"$|  repository: \"ghcr.io/$owner/nekromancer\"|" "$work/nekromancer/values.yaml"
+grep -q "repository: \"ghcr.io/$owner/nekromancer\"" "$work/nekromancer/values.yaml" || { echo "image repository not set" >&2; exit 1; }
 
 mkdir -p "$out"
 helm package "$work/nekromancer" --version "$version" --app-version "$app_version" --destination "$out" >/dev/null

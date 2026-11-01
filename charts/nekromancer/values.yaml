@@ -1,23 +1,131 @@
+# image is used by both the controller and the node-agent.
 image:
-  repository: nekromancer
+  # image.repository is the image without a tag.
+  repository: "nekromancer"
+  # image.tag defaults to the chart's appVersion.
   tag: ""
-  pullPolicy: IfNotPresent
+  # image.pullPolicy is the imagePullPolicy of both containers.
+  pullPolicy: "IfNotPresent"
 
-# Name of an existing Secret with MIKROTIK_USERNAME, MIKROTIK_PASSWORD,
+# imagePullSecrets lists Secrets for pulling the image, as [{name: my-secret}].
+imagePullSecrets: []
+
+# credentialsSecret names an existing Secret with MIKROTIK_USERNAME, MIKROTIK_PASSWORD,
 # PIKVM_USERNAME and PIKVM_PASSWORD. Credentials never go in values.
-credentialsSecret: nekromancer-credentials
+credentialsSecret: "nekromancer-credentials"
+
+rbac:
+  # rbac.create creates the roles and bindings. Without it, grant them to the ServiceAccounts yourself.
+  create: true
+
+controller:
+  # controller.replicas above 1 gives standbys, as only the leader acts.
+  replicas: 1
+  # controller.strategy is the Deployment strategy.
+  strategy: {}
+  serviceAccount:
+    # controller.serviceAccount.create creates the account.
+    create: true
+    # controller.serviceAccount.name defaults to <release>-controller, or "default" when create is false.
+    name: ""
+  # controller.podAnnotations are added to the pod.
+  podAnnotations: {}
+  # controller.podLabels are added to the pod, and can't replace the labels the chart selects on.
+  podLabels: {}
+  # controller.podSecurityContext applies to the pod. ping_group_range must include runAsGroup, or ICMP probes fail.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: "RuntimeDefault"
+    sysctls:
+    - name: "net.ipv4.ping_group_range"
+      value: "65532 65532"
+  # controller.securityContext applies to the container.
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+  # controller.resources sets requests and limits.
+  resources: {}
+  # controller.priorityClassName sets the pod priority.
+  priorityClassName: ""
+  # controller.livenessProbe checks the container.
+  livenessProbe:
+    httpGet:
+      path: "/healthz"
+      port: "health"
+  # controller.readinessProbe checks the container.
+  readinessProbe:
+    httpGet:
+      path: "/readyz"
+      port: "health"
+  # controller.nodeSelector defaults to amd64, the only architecture the image is built for.
+  nodeSelector:
+    kubernetes.io/arch: "amd64"
+  # controller.tolerations lets the pod onto tainted nodes.
+  tolerations: []
+  # controller.affinity can only narrow placement: the chart adds "not a managed node" to every required node term.
+  affinity: {}
 
 agent:
-  systemBusSocket: /run/dbus/system_bus_socket
+  # agent.systemBusSocket is the D-Bus socket on the host.
+  systemBusSocket: "/run/dbus/system_bus_socket"
+  # agent.updateStrategy is the DaemonSet update strategy.
+  updateStrategy: {}
+  serviceAccount:
+    # agent.serviceAccount.create creates the account.
+    create: true
+    # agent.serviceAccount.name defaults to <release>-agent, or "default" when create is false.
+    name: ""
+  # agent.podAnnotations are added to the pod.
+  podAnnotations: {}
+  # agent.podLabels are added to the pod, and can't replace the labels the chart selects on.
+  podLabels: {}
+  # agent.podSecurityContext applies to the pod.
+  podSecurityContext: {}
+  # agent.securityContext applies to the container. logind authorises PowerOff for uid 0, no capabilities are needed.
+  securityContext:
+    runAsUser: 0
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+  # agent.resources sets requests and limits.
+  resources: {}
+  # agent.priorityClassName sets the pod priority.
+  priorityClassName: ""
+  # agent.nodeSelector defaults to managed nodes on amd64, the only architecture the image is built for.
+  nodeSelector:
+    kubernetes.io/arch: "amd64"
+    nekromancer.kiemlicz.github.io/managed: "true"
+  # agent.tolerations defaults to all, so a tainted host can still shut down.
+  tolerations:
+  - operator: "Exists"
+  # agent.affinity can only narrow placement: the chart adds "a host with shutdown: os" to every required node term.
+  affinity: {}
 
-# Inventory, see README. Host names must equal Node names.
+# config is the inventory, see README. Host names must equal Node names.
 config:
-  defaultIdleTimeout: 10m
-  wakeCooldown: 5m
-  powerOffRetry: 2m
+  # config.defaultIdleTimeout applies to nodes without an idle-timeout label.
+  defaultIdleTimeout: "10m"
+  # config.wakeCooldown is the minimum time between wakes of one host.
+  wakeCooldown: "5m"
+  # config.powerOffRetry is how long a host may stay online before power off is requested again.
+  powerOffRetry: "2m"
   mikrotik:
+    # config.mikrotik.url is the RouterOS base URL.
     url: ""
+    # config.mikrotik.insecureSkipVerify disables certificate verification.
     insecureSkipVerify: false
+    # config.mikrotik.caFile is a CA bundle path in the container.
+    caFile: ""
   pikvm:
+    # config.pikvm.insecureSkipVerify is needed for the stock self-signed certificate, which has no SANs for caFile to match.
     insecureSkipVerify: false
+    # config.pikvm.caFile is a CA bundle path in the container.
+    caFile: ""
+  # config.hosts lists the machines Nekromancer can power on and off.
   hosts: []

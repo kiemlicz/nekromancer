@@ -54,6 +54,8 @@ config:
   mikrotik:
     url: https://192.168.1.1
     caFile: ""                  # or insecureSkipVerify: true for a self-signed cert
+  pikvm:
+    insecureSkipVerify: true    # for the stock self-signed cert, or set caFile
   hosts:
   - name: mini1                 # must equal the Node name
     labels: {workload: plex}    # must mirror the kubelet --node-labels
@@ -73,6 +75,14 @@ helm install nekromancer oci://ghcr.io/<owner>/charts/nekromancer --version 1.2.
 ```
 
 Other settings, with defaults: `wakeCooldown: 5m`, `powerOffRetry: 2m`, and `pikvm.insecureSkipVerify` / `pikvm.caFile`.
+
+`controller` and `agent` each take scheduling, security context, resources, pod metadata and `serviceAccount` settings;
+`values.yaml` documents every property and its default. Both select `kubernetes.io/arch: amd64`, because the image is built for amd64 only.
+The chart adds its safety rule to every required node affinity term, so `affinity` can only narrow where a pod runs.
+With `rbac.create: false` you grant the roles yourself, and with `serviceAccount.create: false` the account must already exist.
+
+TLS options apply to all PiKVMs. The stock PiKVM certificate is self-signed for `localhost` and has no SANs, so `caFile` can't validate it:
+use `insecureSkipVerify: true`, or install a certificate that names the host. Without verification, the PiKVM password is sent to whoever answers at that address.
 
 The RouterOS user needs the `rest-api` policy and rights to run `/tool/wol`.
 
@@ -95,11 +105,59 @@ A host using PiKVM for either is verified offline by its power LED. Any other ho
 ### How a node maps to its hardware
 
 The Node name is looked up in `hosts[].name` with an exact match, and that entry's own `pikvmURL`, MAC and address are used.
-The ATX API has no target host, so one URL means one machine, and two hosts sharing a `pikvmURL` fail config validation.
+A PiKVM reports nothing about the machine wired to it, so the pointer is yours to set, in one of two ways:
 
-Nothing checks that a PiKVM is really wired to the host named in its entry, so a swapped URL presses the other machine's button.
+| Setup | Inventory | Calls |
+|---|---|---|
+| One machine per PiKVM | `pikvmURL` | `/api/atx`, `/api/atx/power` |
+| Several machines behind one PiKVM, using PiKVM Switch ports | `pikvmURL` and `pikvmPort` | `/api/switch`, `/api/switch/atx/power?port=<index>` |
+
+### Setting up PiKVM Switch ports
+
+List the ports first, as a stock install has no names:
+
+```bash
+curl -sk -H 'X-KVMD-User: admin' -H 'X-KVMD-Passwd: <password>' https://pikvm.lan/api/switch
+```
+
+`result.model.ports` holds one entry per port, and `result.atx.leds.power` the power LEDs in the same order.
+Ports with a machine attached normally show `true` in `result.video.links` and `result.usb.links`.
+
+Name each port in the PiKVM's port settings, or through the API. Using the Node name keeps both sides readable.
+The API's `port` is the zero-based index, so the port with `id` 1 is `port=0`:
+
+```bash
+curl -sk -X POST -H 'X-KVMD-User: admin' -H 'X-KVMD-Passwd: <password>' \
+  'https://pikvm.lan/api/switch/set_port_params?port=0&name=mini1'
+```
+
+Read `/api/switch` again to confirm the full name was stored.
+PiKVM's docs only mention letters and numbers in names, so a Node name with hyphens is worth checking.
+Then point each host at its port, with `pikvm.insecureSkipVerify: true` if the PiKVM still has its stock certificate:
+
+```yaml
+hosts:
+- {name: mini1, wake: pikvm, shutdown: pikvm, pikvmURL: https://pikvm.lan, pikvmPort: mini1}
+- {name: mini2, wake: pikvm, pikvmURL: https://pikvm.lan, pikvmPort: mini2}
+```
+
+The port is looked up by exact name on every call, so moving it to another number is harmless.
+If the name matches no port or several, nothing is pressed and the host doesn't count as offline.
+Hosts sharing a `pikvmURL` must all set different `pikvmPort` values, or config validation fails.
+
+### Check the wiring before relying on it
+
+Nothing checks the physical wiring, so a wrongly named port or swapped URL presses the other machine's button.
 Its LED then answers for the wrong machine too, which can delete the Node of a host that's still running.
-Check each mapping by hand when adding a host.
+
+Do these checks by hand when adding a host, with or without Switch ports:
+
+1. **Power LED:** with the host running, its LED must read `true`.
+   An LED that stays `false` usually means the wire isn't connected, so don't use PiKVM for that host.
+   A requested shutdown would look finished at once and delete the Node of a running host,
+   and a wake would press the button of a machine that's already on, which can shut it down.
+   A `false` LED with live video and USB links is fine only if the machine really is off, on standby power.
+2. **Right machine:** trigger one real shutdown on a host that's safe to take down, then confirm that this machine went down and its LED turned off.
 
 ## Images and chart
 

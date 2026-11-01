@@ -1,3 +1,4 @@
+{{- if .Values.rbac.create }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -28,7 +29,7 @@ roleRef:
   name: {{ .Release.Name }}-controller
 subjects:
 - kind: ServiceAccount
-  name: {{ .Release.Name }}-controller
+  name: {{ include "nekromancer.serviceAccountName" (dict "root" . "component" "controller") }}
   namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -40,6 +41,10 @@ rules:
 - apiGroups: [coordination.k8s.io]
   resources: [leases]
   verbs: [get, list, watch, create, update, patch, delete]
+# controller-runtime records leader election through the core API, unlike the controller's own events.
+- apiGroups: [""]
+  resources: [events]
+  verbs: [create, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -52,7 +57,7 @@ roleRef:
   name: {{ .Release.Name }}-leader-election
 subjects:
 - kind: ServiceAccount
-  name: {{ .Release.Name }}-controller
+  name: {{ include "nekromancer.serviceAccountName" (dict "root" . "component" "controller") }}
   namespace: {{ .Release.Namespace }}
 {{- if include "nekromancer.osHosts" . | fromJsonArray }}
 ---
@@ -77,6 +82,7 @@ roleRef:
   name: {{ .Release.Name }}-agent
 subjects:
 - kind: ServiceAccount
-  name: {{ .Release.Name }}-agent
+  name: {{ include "nekromancer.serviceAccountName" (dict "root" . "component" "agent") }}
   namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- end }}

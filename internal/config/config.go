@@ -55,8 +55,10 @@ type Host struct {
 	MAC       string `json:"mac"`
 	Interface string `json:"interface"`
 	Address   string `json:"address"`
-	// PiKVMURL identifies the one machine wired to that PiKVM's ATX header.
+	// PiKVMURL identifies the machine wired to that PiKVM's ATX header, or with PiKVMPort, the PiKVM it's behind.
 	PiKVMURL string `json:"pikvmURL"`
+	// PiKVMPort is the name of the host's Switch port on that PiKVM.
+	PiKVMPort string `json:"pikvmPort"`
 }
 
 // UsesPiKVM tells whether the host is wired to a PiKVM, whose power LED then proves its state.
@@ -107,7 +109,7 @@ func (c *Config) validate() error {
 		return errors.New("no hosts configured")
 	}
 	seen := map[string]bool{}
-	pikvms := map[string]string{}
+	pikvms := map[string]map[string]string{}
 	for i, h := range c.Hosts {
 		if h.Name == "" {
 			return fmt.Errorf("hosts[%d]: name is required", i)
@@ -122,12 +124,20 @@ func (c *Config) validate() error {
 		if !h.UsesPiKVM() {
 			continue
 		}
-		// The ATX API has no target host: sharing a URL would press the wrong machine's button.
+		// The plain ATX API has no target host: sharing a URL would press the wrong machine's button.
 		key := strings.ToLower(strings.TrimRight(h.PiKVMURL, "/"))
-		if other, ok := pikvms[key]; ok {
-			return fmt.Errorf("hosts %q and %q have the same pikvmURL", other, h.Name)
+		for port, other := range pikvms[key] {
+			if port == "" || h.PiKVMPort == "" {
+				return fmt.Errorf("hosts %q and %q have the same pikvmURL, so both need a pikvmPort", other, h.Name)
+			}
+			if port == h.PiKVMPort {
+				return fmt.Errorf("hosts %q and %q have the same pikvmPort %q", other, h.Name, port)
+			}
 		}
-		pikvms[key] = h.Name
+		if pikvms[key] == nil {
+			pikvms[key] = map[string]string{}
+		}
+		pikvms[key][h.PiKVMPort] = h.Name
 	}
 	return nil
 }
@@ -156,6 +166,9 @@ func (c *Config) validateProvider(h Host) error {
 			return errors.New("pikvmURL must be set to an absolute URL")
 		}
 		return nil
+	}
+	if h.PiKVMPort != "" {
+		return errors.New("pikvmPort needs a pikvm wake or shutdown")
 	}
 	// Without a PiKVM, ICMP is the only way to confirm the host is down.
 	if ip := net.ParseIP(h.Address); ip == nil || ip.To4() == nil {

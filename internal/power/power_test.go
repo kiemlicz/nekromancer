@@ -2,6 +2,7 @@ package power
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -308,3 +309,117 @@ func TestBuildProbesLEDOnlyWhenWiredToPiKVM(t *testing.T) {
 }
 
 func isPiKVM(p Prober) bool { _, ok := p.(*PiKVM); return ok }
+
+// Stock PiKVMs serve a self-signed certificate.
+func TestBuildPiKVMCertificateVerification(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(ledOn))
+	}))
+	t.Cleanup(srv.Close)
+	offline := func(insecure bool) error {
+		got, err := Build(&config.Config{
+			PiKVM: config.TLS{InsecureSkipVerify: insecure},
+			Hosts: []config.Host{{Name: "a", Wake: config.WakePiKVM, PiKVMURL: srv.URL}},
+		}, Credentials{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = got["a"].Offline(context.Background())
+		return err
+	}
+	var unknownAuthority x509.UnknownAuthorityError
+	if err := offline(false); !errors.As(err, &unknownAuthority) {
+		t.Fatalf("verified by default: err = %v", err)
+	}
+	if err := offline(true); err != nil {
+		t.Fatalf("insecureSkipVerify: %v", err)
+	}
+}
+
+// bridge fakes one PiKVM with Switch ports. The plain ATX API must never be pressed.
+func bridge(t *testing.T, state string) (string, *[]string) {
+	t.Helper()
+	var presses []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/switch":
+			_, _ = w.Write([]byte(state))
+		case "POST /api/switch/atx/power":
+			presses = append(presses, r.URL.Query().Get("port")+":"+r.URL.Query().Get("action"))
+			_, _ = w.Write([]byte(`{"ok":true,"result":{}}`))
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, &presses
+}
+
+// Port 0 is off, port 2 is on, and the port order isn't the inventory's.
+const bridgeState = `{"ok":true,"result":{"model":{"ports":[
+{"name":"mini1"},{"name":""},{"name":"mini2"},{"name":"dup"},{"name":"dup"}]},
+"atx":{"leds":{"power":[false,false,true,false,false]}}}}`
+
+func TestBridgeTargetsPortByName(t *testing.T) {
+	url, presses := bridge(t, bridgeState)
+	got, err := Build(&config.Config{Hosts: []config.Host{
+		{Name: "a", Wake: config.WakePiKVM, Shutdown: config.ShutdownPiKVM, PiKVMURL: url, PiKVMPort: "mini1"},
+		{Name: "b", Wake: config.WakePiKVM, Shutdown: config.ShutdownPiKVM, PiKVMURL: url, PiKVMPort: "mini2"},
+	}}, Credentials{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if off, err := got["a"].Offline(ctx); err != nil || !off {
+		t.Fatalf("a: offline = %v, err = %v", off, err)
+	}
+	if off, err := got["b"].Offline(ctx); err != nil || off {
+		t.Fatalf("b: offline = %v, err = %v", off, err)
+	}
+	// Each of these is the only one that applies to that host's LED, the opposite calls are skipped.
+	for _, call := range []func(context.Context) error{got["a"].PowerOn, got["a"].PowerOff, got["b"].PowerOff, got["b"].PowerOn} {
+		if err := call(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(*presses) != 2 || (*presses)[0] != "0:on" || (*presses)[1] != "2:off" {
+		t.Fatalf("presses = %v", *presses)
+	}
+}
+
+// Anything but one exact match must neither press nor count as offline.
+func TestBridgeUnresolvedPortIsAnError(t *testing.T) {
+	cases := map[string]struct{ port, state string }{
+		"unknown":      {"missing", bridgeState},
+		"duplicate":    {"dup", bridgeState},
+		"case differs": {"N150-0", bridgeState},
+		"no ports":     {"mini1", `{"ok":true,"result":{"model":{"ports":[]},"atx":{"leds":{"power":[]}}}}`},
+		"LED missing":  {"mini2", `{"ok":true,"result":{"model":{"ports":[{"name":"mini1"},{"name":"mini2"}]},"atx":{"leds":{"power":[true]}}}}`},
+		"not json":     {"mini1", `<html>`},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			url, presses := bridge(t, tc.state)
+			got, err := Build(&config.Config{Hosts: []config.Host{
+				{Name: "a", Wake: config.WakePiKVM, Shutdown: config.ShutdownPiKVM, PiKVMURL: url, PiKVMPort: tc.port},
+			}}, Credentials{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			if off, err := got["a"].Offline(ctx); err == nil || off {
+				t.Fatalf("offline = %v, err = %v", off, err)
+			}
+			if err := got["a"].PowerOn(ctx); err == nil {
+				t.Fatal("PowerOn succeeded")
+			}
+			if err := got["a"].PowerOff(ctx); err == nil {
+				t.Fatal("PowerOff succeeded")
+			}
+			if len(*presses) != 0 {
+				t.Fatalf("pressed: %v", *presses)
+			}
+		})
+	}
+}

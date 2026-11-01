@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -96,6 +98,10 @@ func TestParseRejects(t *testing.T) {
 		"no pikvm url":                  {"hosts:\n- {name: a, wake: pikvm}\n", "pikvmURL"},
 		"pikvm shutdown without url":    {mikrotikHostWith(", shutdown: pikvm"), "pikvmURL"},
 		"shared pikvm":                  {"hosts:\n- {name: a, wake: pikvm, pikvmURL: 'https://p/'}\n- {name: b, wake: pikvm, pikvmURL: 'https://P'}\n", "same pikvmURL"},
+		"shared pikvm, one port":        {"hosts:\n- {name: a, wake: pikvm, pikvmURL: 'https://p', pikvmPort: a}\n- {name: b, wake: pikvm, pikvmURL: 'https://p'}\n", "same pikvmURL"},
+		"shared pikvm, one port first":  {"hosts:\n- {name: a, wake: pikvm, pikvmURL: 'https://p'}\n- {name: b, wake: pikvm, pikvmURL: 'https://p', pikvmPort: b}\n", "same pikvmURL"},
+		"shared pikvm port":             {"hosts:\n- {name: a, wake: pikvm, pikvmURL: 'https://p', pikvmPort: x}\n- {name: b, wake: pikvm, pikvmURL: 'https://P/', pikvmPort: x}\n", "same pikvmPort"},
+		"port without pikvm":            {mikrotikHostWith(", pikvmPort: x"), "pikvmPort"},
 		"os shutdown without any probe": {"mikrotik: {url: https://r}\nhosts:\n- {name: a, wake: mikrotik, mac: 'AA:BB:CC:DD:EE:01', interface: b}\n", "address"},
 		"negative timeout":              {"defaultIdleTimeout: -1m\n" + mikrotikHostWith(""), "defaultIdleTimeout"},
 	} {
@@ -105,5 +111,16 @@ func TestParseRejects(t *testing.T) {
 				t.Fatalf("err = %v, want containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestHostsShareAPiKVMThroughPorts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	body := "hosts:\n- {name: a, wake: pikvm, pikvmURL: 'https://p/', pikvmPort: a}\n- {name: b, wake: pikvm, shutdown: pikvm, pikvmURL: 'https://P', pikvmPort: b}\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatal(err)
 	}
 }
