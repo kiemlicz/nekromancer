@@ -39,9 +39,10 @@ expect "leader election core events" "$(yq -o=json -I=0 "select(.kind == \"Role\
 expect "cluster-wide core events" "$(yq -o=json -I=0 "select(.kind == \"ClusterRole\") | $core_events" <<<"$mixed")" ""
 
 # Defaults
-expect "agent nodeSelector" "$(agent <<<"$mixed" | field .nodeSelector)" '{"kubernetes.io/arch":"amd64","nekromancer.kiemlicz.github.io/managed":"true"}'
+# The image is multi-arch, so nothing pins an architecture.
+expect "agent nodeSelector" "$(agent <<<"$mixed" | field .nodeSelector)" '{"nekromancer.kiemlicz.github.io/managed":"true"}'
 expect "agent tolerations" "$(agent <<<"$mixed" | field .tolerations)" '[{"operator":"Exists"}]'
-expect "controller nodeSelector" "$(controller <<<"$mixed" | field .nodeSelector)" '{"kubernetes.io/arch":"amd64"}'
+expect "controller nodeSelector" "$(controller <<<"$mixed" | field .nodeSelector)" null
 expect "controller tolerations" "$(controller <<<"$mixed" | field .tolerations)" null
 OFF_MANAGED='{"matchExpressions":[{"key":"nekromancer.kiemlicz.github.io/managed","operator":"DoesNotExist"}]}'
 expect "controller guard" "$(controller <<<"$mixed" | field "$TERMS")" "[$OFF_MANAGED]"

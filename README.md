@@ -78,9 +78,19 @@ helm install nekromancer oci://ghcr.io/<owner>/charts/nekromancer --version 1.2.
 Other settings, with defaults: `wakeCooldown: 5m`, `powerOffRetry: 2m`, and `pikvm.insecureSkipVerify` / `pikvm.caFile`.
 
 `controller` and `agent` each take scheduling, security context, resources, pod metadata and `serviceAccount` settings;
-`values.yaml` documents every property and its default. Both select `kubernetes.io/arch: amd64`, because the image is built for amd64 only.
+`values.yaml` documents every property and its default. The image is built for amd64 and arm64.
 The chart adds its safety rule to every required node affinity term, so `affinity` can only narrow where a pod runs.
 With `rbac.create: false` you grant the roles yourself, and with `serviceAccount.create: false` the account must already exist.
+
+To run the controller on the control plane, for example Raspberry Pis that are never powered off:
+
+```yaml
+controller:
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: "true"   # k3s sets "true", kubeadm sets ""
+  tolerations:
+  - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+```
 
 TLS options apply to all PiKVMs. The stock PiKVM certificate is self-signed for `localhost` and has no SANs, so `caFile` can't validate it:
 use `insecureSkipVerify: true`, or install a certificate that names the host. Without verification, the PiKVM password is sent to whoever answers at that address.

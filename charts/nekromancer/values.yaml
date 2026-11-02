@@ -62,10 +62,10 @@ controller:
     httpGet:
       path: "/readyz"
       port: "health"
-  # controller.nodeSelector defaults to amd64, the only architecture the image is built for.
-  nodeSelector:
-    kubernetes.io/arch: "amd64"
-  # controller.tolerations lets the pod onto tainted nodes.
+  # controller.nodeSelector picks the nodes it may run on, such as {node-role.kubernetes.io/control-plane: "true"}.
+  nodeSelector: {}
+  # controller.tolerations lets the pod onto tainted nodes. Control plane nodes usually need
+  # [{key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}].
   tolerations: []
   # controller.affinity can only narrow placement: the chart adds "not a managed node" to every required node term.
   affinity: {}
@@ -97,9 +97,8 @@ agent:
   resources: {}
   # agent.priorityClassName sets the pod priority.
   priorityClassName: ""
-  # agent.nodeSelector defaults to managed nodes on amd64, the only architecture the image is built for.
+  # agent.nodeSelector defaults to managed nodes.
   nodeSelector:
-    kubernetes.io/arch: "amd64"
     nekromancer.kiemlicz.github.io/managed: "true"
   # agent.tolerations defaults to all, so a tainted host can still shut down.
   tolerations:

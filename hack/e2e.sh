@@ -123,6 +123,9 @@ cat >"$TMP/values.yaml" <<YAML
 image: {repository: nekromancer, tag: e2e, pullPolicy: Never}
 controller:
   serviceAccount: {name: e2e-controller}
+  # As on a cluster whose workers are all managed.
+  nodeSelector: {node-role.kubernetes.io/control-plane: ""}
+  tolerations: [{key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}]
   podLabels: {e2e: "true"}
   resources: {requests: {cpu: 10m, memory: 32Mi}}
 config:
@@ -148,7 +151,8 @@ YAML
 helm install nekromancer charts/nekromancer -n nekromancer -f "$TMP/values.yaml"
 kubectl -n nekromancer rollout status deploy/nekromancer-controller --timeout=180s
 controller_node=$(kubectl -n nekromancer get pod -l app.kubernetes.io/component=controller -o jsonpath='{.items[0].spec.nodeName}')
-case "$controller_node" in "$HOST"|"$ATX_HOST") echo "controller landed on a managed node"; exit 1;; esac
+[ "$controller_node" = "$CLUSTER-control-plane" ] || { echo "controller on $controller_node, not the control plane"; exit 1; }
+echo "ok: controller on the tainted control plane"
 wait_for "agent scheduled" '[ "$(kubectl -n nekromancer get ds nekromancer-agent -o jsonpath={.status.desiredNumberScheduled})" = 1 ]'
 wait_for "agent pod created" '[ -n "$(kubectl -n nekromancer get pod -l app.kubernetes.io/component=agent -o name)" ]'
 agents=$(kubectl -n nekromancer get pod -l app.kubernetes.io/component=agent -o jsonpath='{.items[*].spec.nodeName}')
