@@ -51,8 +51,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	// Without a way to power the host off or verify it, draining would only strand the node.
 	provider, ok := r.Providers[node.Name]
 	if !ok {
-		log.FromContext(ctx).Info("managed node is missing from the inventory, ignoring")
-		r.event(&node, corev1.EventTypeWarning, "NotInInventory", "Ignore", "no inventory entry for this node")
+		r.event(ctx, &node, corev1.EventTypeWarning, "NotInInventory", "Ignore", "no inventory entry for this node")
 		return ctrl.Result{}, nil
 	}
 	ready := nodes.Ready(&node)
@@ -81,7 +80,7 @@ func (r *NodeReconciler) idle(ctx context.Context, node *corev1.Node) (ctrl.Resu
 
 	timeout, err := nodes.IdleTimeout(node, r.DefaultIdleTimeout)
 	if err != nil {
-		r.event(node, corev1.EventTypeWarning, "InvalidIdleTimeout", "Parse", "%v, using %s", err, timeout)
+		r.event(ctx, node, corev1.EventTypeWarning, "InvalidIdleTimeout", "Parse", "%v, using %s", err, timeout)
 	}
 	now := r.Clock.Now()
 	since, err := time.Parse(time.RFC3339, stamp)
@@ -92,7 +91,7 @@ func (r *NodeReconciler) idle(ctx context.Context, node *corev1.Node) (ctrl.Resu
 	if remaining := since.Add(timeout).Sub(now); remaining > 0 {
 		return ctrl.Result{RequeueAfter: remaining}, nil
 	}
-	r.event(node, corev1.EventTypeNormal, "IdleTimeout", "Shutdown", "idle since %s, shutting down", stamp)
+	r.event(ctx, node, corev1.EventTypeNormal, "IdleTimeout", "Shutdown", "idle since %s, shutting down", stamp)
 	return ctrl.Result{}, r.patch(ctx, node, func(n *corev1.Node) { setAnnotation(n, nodes.AnnotationPowerState, nodes.PowerStateOff) })
 }
 
@@ -118,7 +117,7 @@ func (r *NodeReconciler) shutdown(ctx context.Context, node *corev1.Node, provid
 		// The host can't see a request now, so its silence would prove nothing later.
 		// The Node watch resumes this once Ready returns.
 		if !ready {
-			r.event(node, corev1.EventTypeWarning, "WaitingForReady", "PowerOff", "node is not ready, shutdown waits until it is")
+			r.event(ctx, node, corev1.EventTypeWarning, "WaitingForReady", "PowerOff", "node is not ready, shutdown waits until it is")
 			return ctrl.Result{}, nil
 		}
 		remaining, err := r.drain(ctx, node)
@@ -138,7 +137,7 @@ func (r *NodeReconciler) shutdown(ctx context.Context, node *corev1.Node, provid
 	if err == nil && r.Clock.Now().Sub(at) < r.PowerOffRetry {
 		return ctrl.Result{RequeueAfter: shutdownPoll}, nil
 	}
-	r.event(node, corev1.EventTypeWarning, "StillOnline", "PowerOff", "host still online since %s, requesting power off again", requested)
+	r.event(ctx, node, corev1.EventTypeWarning, "StillOnline", "PowerOff", "host still online since %s, requesting power off again", requested)
 	return r.requestPowerOff(ctx, node, provider)
 }
 
@@ -151,7 +150,7 @@ func (r *NodeReconciler) requestPowerOff(ctx context.Context, node *corev1.Node,
 	if err := provider.PowerOff(ctx); err != nil {
 		return ctrl.Result{}, fmt.Errorf("powering off: %w", err)
 	}
-	r.event(node, corev1.EventTypeNormal, "PowerOff", "PowerOff", "power off requested")
+	r.event(ctx, node, corev1.EventTypeNormal, "PowerOff", "PowerOff", "power off requested")
 	return ctrl.Result{RequeueAfter: shutdownPoll}, nil
 }
 
@@ -187,7 +186,7 @@ func (r *NodeReconciler) confirmedOffline(ctx context.Context, provider power.Pr
 }
 
 func (r *NodeReconciler) deleteNode(ctx context.Context, node *corev1.Node) error {
-	r.event(node, corev1.EventTypeNormal, "Offline", "Delete", "host confirmed offline, deleting node")
+	r.event(ctx, node, corev1.EventTypeNormal, "Offline", "Delete", "host confirmed offline, deleting node")
 	uid := node.UID
 	return client.IgnoreNotFound(r.Delete(ctx, node, client.Preconditions{UID: &uid}))
 }
@@ -212,7 +211,9 @@ func (r *NodeReconciler) patch(ctx context.Context, node *corev1.Node, mutate fu
 	return r.Patch(ctx, node, client.MergeFrom(base))
 }
 
-func (r *NodeReconciler) event(node *corev1.Node, kind, reason, action, note string, args ...any) {
+// event also logs, as Events expire after an hour.
+func (r *NodeReconciler) event(ctx context.Context, node *corev1.Node, kind, reason, action, note string, args ...any) {
+	log.FromContext(ctx).Info(fmt.Sprintf(note, args...), "reason", reason, "type", kind)
 	r.Recorder.Eventf(node, nil, kind, reason, action, note, args...)
 }
 

@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -42,6 +41,7 @@ type wakeEnv struct {
 	rec       *WakeReconciler
 	clock     *clocktesting.FakeClock
 	providers map[string]*fakeProvider
+	logs      logSink
 }
 
 func newWakeEnv(t *testing.T, objs ...client.Object) *wakeEnv {
@@ -61,7 +61,7 @@ func newWakeEnv(t *testing.T, objs ...client.Object) *wakeEnv {
 }
 
 func (e *wakeEnv) reconcile() (ctrl.Result, error) {
-	return e.rec.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "plex", Namespace: "default"}})
+	return e.rec.Reconcile(e.logs.ctx(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "plex", Namespace: "default"}})
 }
 
 func (e *wakeEnv) wakes(host string) int { return e.providers[host].powerOns }
@@ -229,5 +229,15 @@ func TestAllWakesFailingReturnsError(t *testing.T) {
 	e.providers["mini2"].onErr = errors.New("router down")
 	if _, err := e.reconcile(); err == nil {
 		t.Fatal("want error so the request is retried")
+	}
+}
+
+func TestWakeIsLogged(t *testing.T) {
+	e := newWakeEnv(t, pendingPod())
+	if _, err := e.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if !e.logs.has(`"msg"="woke host"`, `"host"="mini1"`, `"pod"="default/plex"`) {
+		t.Fatalf("wake not logged: %q", e.logs.lines)
 	}
 }

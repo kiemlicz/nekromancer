@@ -86,6 +86,7 @@ func (r *WakeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			r.lastWake = map[string]time.Time{}
 		}
 		r.lastWake[h.Name] = now
+		log.FromContext(ctx).Info("woke host", "host", h.Name, "pod", client.ObjectKeyFromObject(&pod).String())
 		r.Recorder.Eventf(&pod, nil, corev1.EventTypeNormal, "WakeDispatched", "Wake", "woke host %s", h.Name)
 		return ctrl.Result{RequeueAfter: pendingPoll}, nil
 	}

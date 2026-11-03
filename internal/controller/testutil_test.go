@@ -3,9 +3,11 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr/funcr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -14,12 +16,34 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"gitlab.l3a.dev/infra/nekromancer/internal/nodes"
 	"gitlab.l3a.dev/infra/nekromancer/internal/power"
 )
 
 var t0 = time.Date(2026, 11, 1, 14, 0, 0, 0, time.UTC)
+
+// logSink records every log line written through the context logger.
+type logSink struct{ lines []string }
+
+func (l *logSink) ctx() context.Context {
+	return log.IntoContext(context.Background(), funcr.New(func(_, args string) { l.lines = append(l.lines, args) }, funcr.Options{}))
+}
+
+// has reports whether one line contains every fragment.
+func (l *logSink) has(fragments ...string) bool {
+	for _, line := range l.lines {
+		ok := true
+		for _, f := range fragments {
+			ok = ok && strings.Contains(line, f)
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}
 
 type fakeProvider struct {
 	offline             bool
@@ -90,6 +114,7 @@ type env struct {
 	provider *fakeProvider
 	rec      *NodeReconciler
 	events   *events.FakeRecorder
+	logs     logSink
 }
 
 func newEnv(t *testing.T, objs ...client.Object) *env {
@@ -111,7 +136,7 @@ func newEnv(t *testing.T, objs ...client.Object) *env {
 
 func (e *env) reconcile() ctrl.Result {
 	e.t.Helper()
-	res, err := e.rec.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mini1"}})
+	res, err := e.rec.Reconcile(e.logs.ctx(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "mini1"}})
 	if err != nil {
 		e.t.Fatalf("reconcile: %v", err)
 	}

@@ -299,3 +299,16 @@ func TestRequestedAndOfflineDeletesNotReadyNode(t *testing.T) {
 		t.Fatal("node not deleted")
 	}
 }
+
+func TestLifecycleEventsAreLogged(t *testing.T) {
+	e := newEnv(t, managedNode("mini1", off()), daemon("ds", "mini1"))
+	e.reconcile()
+	if !e.logs.has(`"msg"="power off requested"`, `"reason"="PowerOff"`) {
+		t.Fatalf("power off not logged: %q", e.logs.lines)
+	}
+	e.provider.offline = true
+	e.reconcile()
+	if !e.logs.has(`"msg"="host confirmed offline, deleting node"`, `"reason"="Offline"`) {
+		t.Fatalf("offline not logged: %q", e.logs.lines)
+	}
+}

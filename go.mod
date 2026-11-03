@@ -3,6 +3,7 @@ module gitlab.l3a.dev/infra/nekromancer
 go 1.27.0
 
 require (
+	github.com/go-logr/logr v1.4.3
 	github.com/godbus/dbus/v5 v5.2.4
 	golang.org/x/net v0.62.0
 	k8s.io/api v0.37.2
@@ -22,7 +23,6 @@ require (
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
-	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/zapr v1.3.0 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
 	github.com/go-openapi/jsonreference v1.0.0 // indirect
