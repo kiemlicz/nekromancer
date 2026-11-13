@@ -22,15 +22,20 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 {{/*
 Renders an affinity with a guard in every required node term, as terms are ORed. Values can narrow placement, never widen it.
-Args: affinity, field (matchExpressions or matchFields), guard (list of requirements).
+Args: affinity, field (matchExpressions or matchFields), guard (list of requirements) or guards (list of guards, ORed:
+each required term is repeated once per guard; matchFields metadata.name takes a single value, so one guard per host).
 */}}
 {{- define "nekromancer.affinity" -}}
 {{- $affinity := deepCopy (.affinity | default dict) }}
 {{- $nodeAffinity := $affinity.nodeAffinity | default dict }}
 {{- $required := $nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution | default dict }}
+{{- $guards := .guards | default (list .guard) }}
 {{- $terms := list }}
-{{- range $required.nodeSelectorTerms | default (list dict) }}
-{{- $terms = append $terms (set . $.field (concat (get . $.field | default list) $.guard)) }}
+{{- range $term := $required.nodeSelectorTerms | default (list dict) }}
+{{- range $guard := $guards }}
+{{- $t := deepCopy $term }}
+{{- $terms = append $terms (set $t $.field (concat (get $t $.field | default list) $guard)) }}
+{{- end }}
 {{- end }}
 {{- $_ := set $required "nodeSelectorTerms" $terms }}
 {{- $_ = set $nodeAffinity "requiredDuringSchedulingIgnoredDuringExecution" $required }}

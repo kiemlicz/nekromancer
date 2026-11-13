@@ -19,7 +19,8 @@ config:
   - {name: wol2, wake: mikrotik, shutdown: os, mac: "AA:BB:CC:DD:EE:02", interface: b, address: 10.0.0.2}
 YAML
 )
-names=$(agent <<<"$mixed" | yq -r '.spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchFields[0].values | join(",")')
+# One term per host: a metadata.name field selector takes exactly one value.
+names=$(agent <<<"$mixed" | yq -r '[.spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[].matchFields[0].values | select(length == 1) | .[0]] | join(",")')
 [ "$names" = wol1,wol2 ] || fail "agent targets '$names'"
 [ "$(agent <<<"$mixed" | yq '.spec.template.spec.hostPID // false')" = false ] || fail "agent shares the host PID namespace"
 [ "$(agent <<<"$mixed" | yq '.spec.template.spec.containers[0].securityContext.privileged // false')" = false ] || fail "agent is privileged"
