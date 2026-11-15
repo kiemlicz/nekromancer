@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,6 +42,7 @@ type wakeEnv struct {
 	rec       *WakeReconciler
 	clock     *clocktesting.FakeClock
 	providers map[string]*fakeProvider
+	events    *events.FakeRecorder
 	logs      logSink
 }
 
@@ -49,8 +51,9 @@ func newWakeEnv(t *testing.T, objs ...client.Object) *wakeEnv {
 	c := fake.NewClientBuilder().WithObjects(objs...).Build()
 	clk := clocktesting.NewFakeClock(t0)
 	a, b, c3 := &fakeProvider{}, &fakeProvider{}, &fakeProvider{}
-	return &wakeEnv{t: t, clock: clk, providers: map[string]*fakeProvider{"mini1": a, "mini2": b, "other": c3}, rec: &WakeReconciler{
-		Client: c, Recorder: events.NewFakeRecorder(50), Clock: clk, Cooldown: 5 * time.Minute,
+	rec := events.NewFakeRecorder(50)
+	return &wakeEnv{t: t, clock: clk, events: rec, providers: map[string]*fakeProvider{"mini1": a, "mini2": b, "other": c3}, rec: &WakeReconciler{
+		Client: c, Recorder: rec, Clock: clk, Cooldown: 5 * time.Minute,
 		Hosts: []config.Host{
 			{Name: "mini1", Labels: map[string]string{"workload": "plex"}},
 			{Name: "mini2", Labels: map[string]string{"workload": "plex"}},
@@ -65,6 +68,19 @@ func (e *wakeEnv) reconcile() (ctrl.Result, error) {
 }
 
 func (e *wakeEnv) wakes(host string) int { return e.providers[host].powerOns }
+
+// event drains the recorded events and reports whether one has this reason.
+func (e *wakeEnv) event(reason string) bool {
+	found := false
+	for {
+		select {
+		case ev := <-e.events.Events:
+			found = found || strings.Contains(ev, " "+reason+" ")
+		default:
+			return found
+		}
+	}
+}
 
 func TestWakesMatchingHostOnly(t *testing.T) {
 	e := newWakeEnv(t, pendingPod())
@@ -205,6 +221,7 @@ func TestCooldownSuppressesRepeatWake(t *testing.T) {
 func TestAfterCooldownTriesTheOtherCandidate(t *testing.T) {
 	e := newWakeEnv(t, pendingPod())
 	_, _ = e.reconcile()
+	e.providers["mini1"].offline = true
 	e.clock.Step(5 * time.Minute)
 	_, _ = e.reconcile()
 	if e.wakes("mini1") != 1 || e.wakes("mini2") != 1 {
@@ -214,7 +231,7 @@ func TestAfterCooldownTriesTheOtherCandidate(t *testing.T) {
 
 func TestFailedWakeFallsThroughWithoutCooldown(t *testing.T) {
 	e := newWakeEnv(t, pendingPod())
-	e.providers["mini1"].onErr = errors.New("router down")
+	e.providers["mini1"].onErr = power.NotSent(errors.New("connection refused"))
 	if _, err := e.reconcile(); err != nil {
 		t.Fatal(err)
 	}
@@ -225,10 +242,103 @@ func TestFailedWakeFallsThroughWithoutCooldown(t *testing.T) {
 
 func TestAllWakesFailingReturnsError(t *testing.T) {
 	e := newWakeEnv(t, pendingPod())
-	e.providers["mini1"].onErr = errors.New("router down")
-	e.providers["mini2"].onErr = errors.New("router down")
+	e.providers["mini1"].onErr = power.NotSent(errors.New("connection refused"))
+	e.providers["mini2"].onErr = power.NotSent(errors.New("connection refused"))
 	if _, err := e.reconcile(); err == nil {
 		t.Fatal("want error so the request is retried")
+	}
+}
+
+// Nothing reached a device, so the retry must not wait out a cooldown.
+func TestNotSentFailureLeavesNoCooldown(t *testing.T) {
+	e := newWakeEnv(t, pendingPod())
+	e.providers["mini1"].onErr = power.NotSent(errors.New("connection refused"))
+	e.providers["mini2"].onErr = power.NotSent(errors.New("connection refused"))
+	_, _ = e.reconcile()
+	e.providers["mini1"].onErr, e.providers["mini2"].onErr = nil, nil
+	if _, err := e.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if e.wakes("mini1")+e.wakes("mini2") != 3 {
+		t.Fatalf("wakes %d %d", e.wakes("mini1"), e.wakes("mini2"))
+	}
+}
+
+// A timeout or 5xx may have woken the host: trying the next one could wake two.
+func TestAmbiguousFailureDoesNotTryAnotherHost(t *testing.T) {
+	e := newWakeEnv(t, pendingPod())
+	e.providers["mini1"].onErr = errors.New("Client.Timeout exceeded while awaiting headers")
+	res, err := e.reconcile()
+	if err != nil || res.RequeueAfter != pendingPoll {
+		t.Fatalf("res %v err %v", res, err)
+	}
+	if !e.event("WakeUncertain") {
+		t.Fatal("no WakeUncertain event")
+	}
+	e.clock.Step(4 * time.Minute)
+	_, _ = e.reconcile()
+	if e.wakes("mini1") != 1 || e.wakes("mini2") != 0 {
+		t.Fatalf("wakes %d %d", e.wakes("mini1"), e.wakes("mini2"))
+	}
+}
+
+func TestAmbiguousFailureThenHostDownTriesTheOther(t *testing.T) {
+	e := newWakeEnv(t, pendingPod())
+	e.providers["mini1"].onErr = errors.New("500 Internal Server Error")
+	_, _ = e.reconcile()
+	e.providers["mini1"].offline = true
+	e.clock.Step(5 * time.Minute)
+	_, _ = e.reconcile()
+	if e.wakes("mini1") != 1 || e.wakes("mini2") != 1 {
+		t.Fatalf("wakes %d %d", e.wakes("mini1"), e.wakes("mini2"))
+	}
+}
+
+// The woken host booted but never got Ready: waking the rest in turn would not fix that.
+func TestWokenHostUpWithoutReadyNodeBlocksOtherWakes(t *testing.T) {
+	for name, objs := range map[string][]client.Object{
+		"no Node":       {pendingPod()},
+		"NotReady Node": {pendingPod(), managedNode("mini1", notReadyFor(time.Hour))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newWakeEnv(t, objs...)
+			_, _ = e.reconcile()
+			for range 3 {
+				e.clock.Step(5 * time.Minute)
+				res, err := e.reconcile()
+				if err != nil || res.RequeueAfter != pendingPoll {
+					t.Fatalf("res %v err %v", res, err)
+				}
+			}
+			if e.wakes("mini1") != 1 || e.wakes("mini2") != 0 {
+				t.Fatalf("wakes %d %d", e.wakes("mini1"), e.wakes("mini2"))
+			}
+			if !e.event("WakeStalled") {
+				t.Fatal("no WakeStalled event")
+			}
+		})
+	}
+}
+
+func TestWokenHostProbeErrorBlocksOtherWakes(t *testing.T) {
+	e := newWakeEnv(t, pendingPod())
+	_, _ = e.reconcile()
+	e.providers["mini1"].offlineErr = errProbe
+	e.clock.Step(5 * time.Minute)
+	_, _ = e.reconcile()
+	if e.wakes("mini1") != 1 || e.wakes("mini2") != 0 {
+		t.Fatalf("wakes %d %d", e.wakes("mini1"), e.wakes("mini2"))
+	}
+}
+
+// A host is only probed once woken: a never-woken NotReady one is still wakeable, as for the power button.
+func TestNeverWokenHostIsNotProbed(t *testing.T) {
+	e := newWakeEnv(t, pendingPod())
+	e.providers["mini1"].offlineErr = errProbe
+	e.providers["mini2"].offlineErr = errProbe
+	_, _ = e.reconcile()
+	if e.wakes("mini1") != 1 {
+		t.Fatalf("wakes = %d", e.wakes("mini1"))
 	}
 }
 

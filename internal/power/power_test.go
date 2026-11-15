@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"gitlab.l3a.dev/infra/nekromancer/internal/config"
 )
@@ -44,6 +45,51 @@ func TestMikrotikPowerOnSurfacesAPIError(t *testing.T) {
 	m := &Mikrotik{HTTP: srv.Client(), URL: srv.URL}
 	if err := m.PowerOn(context.Background()); err == nil {
 		t.Fatal("want error")
+	}
+}
+
+// Only failures that provably never reached the device are NotSent.
+func TestPowerOnFailureClassification(t *testing.T) {
+	status := func(code int) string {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(code) }))
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+	closed := httptest.NewServer(http.NotFoundHandler())
+	refused := closed.URL
+	closed.Close()
+	release := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	t.Cleanup(slow.Close)
+	t.Cleanup(func() { close(release) })
+	tlsSrv := httptest.NewTLSServer(http.NotFoundHandler())
+	t.Cleanup(tlsSrv.Close)
+
+	for name, tc := range map[string]struct {
+		url     string
+		client  *http.Client
+		notSent bool
+	}{
+		"connection refused":     {url: refused, notSent: true},
+		"unknown host":           {url: "http://nekromancer.invalid", notSent: true},
+		"untrusted cert":         {url: tlsSrv.URL, notSent: true},
+		"rejected":               {url: status(http.StatusUnauthorized), notSent: true},
+		"server error":           {url: status(http.StatusInternalServerError)},
+		"timeout awaiting reply": {url: slow.URL, client: &http.Client{Timeout: 50 * time.Millisecond}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := tc.client
+			if c == nil {
+				c = &http.Client{}
+			}
+			err := (&Mikrotik{HTTP: c, URL: tc.url}).PowerOn(context.Background())
+			if err == nil {
+				t.Fatal("want error")
+			}
+			if IsNotSent(err) != tc.notSent {
+				t.Fatalf("IsNotSent = %v for %v", !tc.notSent, err)
+			}
+		})
 	}
 }
 
@@ -99,8 +145,8 @@ func TestPiKVMPowerOnSkipsPressWhenAlreadyOn(t *testing.T) {
 
 func TestPiKVMPowerOnFailsWhenStateUnknown(t *testing.T) {
 	p, actions := pikvm(t, `{}`, 500)
-	if err := p.PowerOn(context.Background()); err == nil {
-		t.Fatal("want error")
+	if err := p.PowerOn(context.Background()); !IsNotSent(err) {
+		t.Fatalf("want NotSent, got %v", err)
 	}
 	if len(*actions) != 0 {
 		t.Errorf("actions = %v", *actions)

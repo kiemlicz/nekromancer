@@ -213,12 +213,14 @@ sequenceDiagram
         Note over WR: no wake, recheck in 30s
     else every matching host is mid power off
         Note over WR: no wake, recheck in 30s
+    else a host woken earlier is not confirmed down
+        Note over WR: WakeStalled event, no wake, recheck in 30s
     else wakeable hosts available
-        loop least recently tried first, until one call succeeds
+        loop least recently tried first, while the call provably never reached the device
             WR->>Prov: POST /rest/tool/wol or /api/atx/power?action=on
         end
         Prov->>Host: magic packet, or ATX power on unless the LED is on
-        Note over WR: start cooldown, recheck in 30s
+        Note over WR: start cooldown, also on a timeout or 5xx, recheck in 30s
         Host->>Host: boot
         Host->>API: kubelet registers a fresh Node, or updates a NotReady one
         Sched->>API: bind pod to the Node

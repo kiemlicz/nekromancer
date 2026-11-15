@@ -33,7 +33,7 @@ func (p *PiKVM) press(ctx context.Context, action string) error {
 	if p.Port != "" {
 		index, _, err := p.switchPort(ctx)
 		if err != nil {
-			return err
+			return NotSent(err)
 		}
 		path = fmt.Sprintf("/api/switch/atx/power?port=%d&action=%s", index, action)
 	}
@@ -90,7 +90,7 @@ func (p *PiKVM) switchPort(ctx context.Context) (index int, powered bool, err er
 func (p *PiKVM) PowerOn(ctx context.Context) error {
 	off, err := p.Offline(ctx)
 	if err != nil {
-		return err
+		return NotSent(err)
 	}
 	if !off {
 		return nil

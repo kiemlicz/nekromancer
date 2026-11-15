@@ -19,11 +19,11 @@ type Mikrotik struct {
 func (m *Mikrotik) PowerOn(ctx context.Context) error {
 	payload, err := json.Marshal(map[string]string{"mac": m.MAC, "interface": m.Interface})
 	if err != nil {
-		return err
+		return NotSent(err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(m.URL, "/")+"/rest/tool/wol", bytes.NewReader(payload))
 	if err != nil {
-		return err
+		return NotSent(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth(m.Username, m.Password)

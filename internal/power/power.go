@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -113,10 +115,42 @@ func httpClient(t config.TLS) (*http.Client, error) {
 	}, nil
 }
 
+type notSentError struct{ err error }
+
+func (e notSentError) Error() string { return e.err.Error() }
+func (e notSentError) Unwrap() error { return e.err }
+
+// NotSent marks a failure that provably left the device untouched, so trying another host is safe.
+func NotSent(err error) error {
+	if err == nil {
+		return nil
+	}
+	return notSentError{err}
+}
+
+// IsNotSent is false for anything ambiguous, such as a timeout or a 5xx: the device may have acted.
+func IsNotSent(err error) bool {
+	var e notSentError
+	return errors.As(err, &e)
+}
+
+// beforeSend reports a transport failure that happened before the request reached the device.
+func beforeSend(err error) bool {
+	var op *net.OpError
+	var dns *net.DNSError
+	var verify *tls.CertificateVerificationError
+	var header tls.RecordHeaderError
+	return (errors.As(err, &op) && op.Op == "dial") || errors.As(err, &dns) || errors.As(err, &verify) || errors.As(err, &header)
+}
+
 // do returns the body of a 2xx response and an error for anything else.
+// Dial and TLS failures and 4xx rejections are NotSent.
 func do(c *http.Client, req *http.Request) ([]byte, error) {
 	resp, err := c.Do(req)
 	if err != nil {
+		if beforeSend(err) {
+			return nil, NotSent(err)
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -125,7 +159,11 @@ func do(c *http.Client, req *http.Request) ([]byte, error) {
 		return nil, err
 	}
 	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("%s %s: %s: %s", req.Method, req.URL.Path, resp.Status, strings.TrimSpace(string(body)))
+		err := fmt.Errorf("%s %s: %s: %s", req.Method, req.URL.Path, resp.Status, strings.TrimSpace(string(body)))
+		if resp.StatusCode/100 == 4 {
+			return nil, NotSent(err)
+		}
+		return nil, err
 	}
 	return body, nil
 }

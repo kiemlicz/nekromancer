@@ -188,7 +188,12 @@ To build locally, run `make image IMAGE=<registry>/nekromancer:dev`.
   because being unschedulable isn't a placement problem for them.
 - **One host at a time:** if any matching host already has a Ready Node, nothing else is woken, even if that host is full.
   This prevents a wake and reap loop for pods that a second machine wouldn't help.
-  With several matching hosts, the least recently tried is woken after `wakeCooldown`.
+  With several matching hosts, the least recently tried is woken after `wakeCooldown`,
+  but only once the previously woken one is confirmed down. One that is up without a Ready Node blocks further wakes
+  and raises a `WakeStalled` event: fix or power off that host.
+- **Uncertain wakes:** a timeout or 5xx from the router or PiKVM may still have woken the host,
+  so it starts the cooldown and raises `WakeUncertain` instead of trying the next host.
+  Only dial, TLS and 4xx failures move straight on to the next one.
 - **Cancelling:** removing `power-state` before the host goes down stops the shutdown if the agent hasn't acted yet,
   but the node stays cordoned. Run `kubectl uncordon` yourself.
 - **Hosts switched off by hand:** the pods stay on the `NotReady` Node until Kubernetes evicts them, 5 minutes by default.

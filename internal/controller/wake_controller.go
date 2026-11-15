@@ -71,26 +71,64 @@ func (r *WakeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			return ctrl.Result{RequeueAfter: pendingPoll}, nil
 		}
 	}
+	if stalled := r.stalled(ctx, wakeable); stalled != "" {
+		r.Recorder.Eventf(&pod, nil, corev1.EventTypeWarning, "WakeStalled", "Wake",
+			"host %s was woken and is not confirmed down, but its Node is not Ready; not waking another host", stalled)
+		return ctrl.Result{RequeueAfter: pendingPoll}, nil
+	}
 	// Least recently tried first, so a host that never came up does not starve the others.
 	slices.SortStableFunc(wakeable, func(a, b config.Host) int {
 		return r.lastWake[a.Name].Compare(r.lastWake[b.Name])
 	})
+	if r.lastWake == nil {
+		r.lastWake = map[string]time.Time{}
+	}
 	var errs []error
 	for _, h := range wakeable {
-		if err := r.Providers[h.Name].PowerOn(ctx); err != nil {
-			log.FromContext(ctx).Error(err, "waking host", "host", h.Name)
+		// Recorded before the call: an ambiguous failure may still have woken the host.
+		prev, had := r.lastWake[h.Name]
+		r.lastWake[h.Name] = now
+		err := r.Providers[h.Name].PowerOn(ctx)
+		if power.IsNotSent(err) {
+			if had {
+				r.lastWake[h.Name] = prev
+			} else {
+				delete(r.lastWake, h.Name)
+			}
+			log.FromContext(ctx).Error(err, "waking host, trying the next one", "host", h.Name)
 			errs = append(errs, err)
 			continue
 		}
-		if r.lastWake == nil {
-			r.lastWake = map[string]time.Time{}
+		if err != nil {
+			// Another host now would risk waking two, so wait out the cooldown.
+			log.FromContext(ctx).Error(err, "waking host, outcome unknown", "host", h.Name)
+			r.Recorder.Eventf(&pod, nil, corev1.EventTypeWarning, "WakeUncertain", "Wake", "waking host %s: %v", h.Name, err)
+			return ctrl.Result{RequeueAfter: pendingPoll}, nil
 		}
-		r.lastWake[h.Name] = now
 		log.FromContext(ctx).Info("woke host", "host", h.Name, "pod", client.ObjectKeyFromObject(&pod).String())
 		r.Recorder.Eventf(&pod, nil, corev1.EventTypeNormal, "WakeDispatched", "Wake", "woke host %s", h.Name)
 		return ctrl.Result{RequeueAfter: pendingPoll}, nil
 	}
 	return ctrl.Result{}, errors.Join(errs...)
+}
+
+// stalled returns a host woken earlier that is still not confirmed down. It booted,
+// or may have, but never got a Ready Node: waking another would only repeat that.
+// A probe error counts as up.
+func (r *WakeReconciler) stalled(ctx context.Context, wakeable []config.Host) string {
+	for _, h := range wakeable {
+		if _, ok := r.lastWake[h.Name]; !ok {
+			continue
+		}
+		off, err := r.Providers[h.Name].Offline(ctx)
+		if err != nil {
+			log.FromContext(ctx).Error(err, "probing woken host", "host", h.Name)
+		}
+		if err != nil || !off {
+			return h.Name
+		}
+	}
+	return ""
 }
 
 // wantsWake requires an explicit placement constraint: a pod that fits anywhere
